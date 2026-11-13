@@ -12,6 +12,7 @@
 - Operators without a plugin are refused, not estimated. Plugin authoring: `docs/plugin-guide.md`.
 
 ## Real-card measurements
-- gfx938 / BW1102: node `nmz5` (ssh via `bw-zz`, needs the user's ControlMaster: `ssh -O check bw-zz`), container `tanbo_kda_nmz` (DTK 26.10, torch 2.11), home mounted at `/public4/home/tanbo`. Check `hy-smi` for an idle card first; run `bench/gemm_sweep.py` with `HIP_VISIBLE_DEVICES=<idle card>` inside the container after `source /opt/dtk/env.sh`.
-- gfx936 / BW1000: historically `bw7` (container `tanbo_mega_k3`), not reachable as of 2026-11-13 (hostname not resolvable from bw-zz; 10.16.1.47 rejects the key). Ask the user for a node.
+- Both nodes go through `bw-zz`; reuse the user's ControlMaster (`ssh -O check bw-zz`), never type passwords.
+- gfx938 / BW1102: node `nmz5`, container `tanbo_kda_nmz` (stopped by default: `docker start` it, `docker stop` it afterwards) (DTK 26.10, torch 2.11), home mounted at `/public4/home/tanbo`. Check `hy-smi` for an idle card first; run `bench/gemm_sweep.py` with `HIP_VISIBLE_DEVICES=<idle card>` inside the container after `source /opt/dtk/env.sh`.
+- gfx936 / BW1000: node `bw52` (ssh via `bw-zz`), running container `tanbo_mg2610` (DTK 26.10, torch 2.11), home `/public/home/tanbo`. (`bw7` from the old repo is gone.)
 - Committed sweeps go to `data/measured/gemm_<dtype>_<machine id>_<date>.jsonl`; `tests/test_check.py` picks them up automatically.

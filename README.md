@@ -67,14 +67,20 @@ python -m opceil calibrate --out machines/<arch>-<board>.json
 
 ## 现在有多准（2026-11-13）
 
-GEMM 在 gfx938 / BW1102 上的 kernel 级核对（138 个 bf16 shape，`docs/validation-gemm.md`）：
+GEMM 的 kernel 级核对（每张卡 138 个 bf16 shape，`docs/validation-gemm.md`）：
 
-- **下限零违例**，Spearman 0.983；
-- 大 shape 的算力受限、访存受限两端基本是紧的（BLAS 多数跑到 `T_bound` 的 65–93%）；
-- **拐点附近（M≈128–512）和总工作量很小的 GEMM 偏乐观 2–8 倍**：缺 tile 铺满 / 尾波项和 kernel 级最小时间项。
+| | gfx936 / BW1000（bw52） | gfx938 / BW1102（nmz5） |
+|---|---:|---:|
+| 下限违例 | 0 / 138 | 0 / 138 |
+| Spearman(T_bound, 实测) | 0.981 | 0.983 |
+| η = T_bound / 实测，中位 | 0.67 | 0.57 |
+
+- 大 shape 的算力受限、访存受限两端基本是紧的；
+- **拐点附近和总工作量很小的 GEMM 偏乐观 2–8 倍**，两张卡规律一致（凹陷随拐点位置移动）：缺 tile 铺满 / 尾波项、拐点处的重叠项和 kernel 级最小时间项；
+- 2 的幂方阵在两张卡上都明显变慢，疑似 HBM 通道冲突，待确认。
 
 KDA：`T_bound` 0.605 ms（可证明），`T_theory` 0.837 ms（瓶颈是用 KDA 实测步长算的串行链，属 calibrated），
-`T_split` 2.78 ms（model 估计，该拆法未被实现验证），生产实现 5.32 ms。gfx936 的 kernel 级核对待补。
+`T_split` 2.78 ms（model 估计，该拆法未被实现验证），生产实现 5.32 ms。
 
 结论口径：**瓶颈类型和 `T_bound` 可以信；`T_theory` / `T_split` 的绝对值只在验证过的 shape 类别上可信。**
 
