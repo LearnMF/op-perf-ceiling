@@ -21,3 +21,7 @@
 - `T_bound` is priced at datasheet peaks (`peaks_bound` in `TheoryMachine`); a measured peak is only the best a kernel has reached. If any measured kernel beats a measured peak, raise `value` to it, keep the old one in `microbench_value`, and record the source in `_observed`.
 - `opceil/model/tiling.py` prices GEMMs as tile grids (`T_split["tiled"]`); its assumptions live in `docs/devlog/constant-ledger.md`. Do not tune them against `data/measured/`; `tests/test_check.py` requires `T_split <= measured` on every committed sweep.
 - Card-side scripts: `bench/gemm_sweep.py` (`--tunableop` = best of all hipBLASLt/rocBLAS solutions, ~30 s per shape; use `--max-gflop 50`), `bench/kernel_floor.py`, `bench/ld_pad.py`.
+
+## KDA against flash-train mk3
+- Builds: `feat/kda-gfx936-mk3` on bw52 in container `tanbo_peak_bw52` (has librt.so; `tanbo_mg2610` lacks it), `feat/kda-gfx938-mk3` on nmz5 in `tanbo_kda_nmz`. Ship the source with `git archive`, build with `pip wheel . --no-deps` and install with `pip install --no-deps --target <dir>`; pybind11 / scikit-build-core go in a separate `--target` dir via `CMAKE_PREFIX_PATH`. Never install into the container's site-packages.
+- Measure: `PYTHONPATH=<target dir> FT_COMMIT=<sha> HIP_VISIBLE_DEVICES=<idle card> python bench/kda_bench.py --out ...`; check the g2_* kernel names appear (not a fallback). Compare: `python -m opceil check --machine ... --measured data/measured/kda_*.jsonl [--other machine.json:other.jsonl]`.

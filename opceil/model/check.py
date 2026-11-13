@@ -138,8 +138,25 @@ def main(argv=None) -> int:
     p.add_argument("--measured", required=True, help="JSONL from bench/gemm_sweep.py")
     p.add_argument("--peaks", default="measured", choices=("measured", "theoretical"))
     p.add_argument("--out", default=None)
+    p.add_argument("--other", default=None, help="KDA only: the other card's measurements, for calibrated transfer "
+                                                 "(format: machine.json:measured.jsonl)")
     a = p.parse_args(argv)
     meta, rows = load(a.measured)
+    if rows and "T" in rows[0] and "H" in rows[0]:                     # bench/kda_bench.py output
+        from . import check_kda
+        other = None
+        if a.other:
+            om, of = a.other.split(":", 1)
+            other = check_kda.rows_for(TheoryMachine.load(om, a.peaks), check_kda.load(of)[1])
+        r = check_kda.check(TheoryMachine.load(a.machine, a.peaks), rows, other)
+        md = check_kda.markdown(r, meta)
+        if a.out:
+            open(a.out + ".check.json", "w", encoding="utf-8").write(json.dumps(r, indent=1) + "\n")
+            open(a.out + ".check.md", "w", encoding="utf-8").write(md)
+            print("wrote %s.check.json / .md" % a.out)
+        else:
+            print(md)
+        return 0
     r = check(TheoryMachine.load(a.machine, a.peaks), rows)
     md = markdown(r, meta)
     if a.out:

@@ -82,8 +82,16 @@ GEMM 的 kernel 级核对（每张卡 138 个 bf16 shape，另有 104 个 shape 
   下一步要写针对性 kernel 去验证；
 - gfx936 的 2 的幂方阵慢 30–50%，补齐 leading dimension 可拿回（已实测）。
 
-KDA：`T_bound` 0.605 ms（可证明），`T_theory` 0.837 ms（瓶颈是用 KDA 实测步长算的串行链，属 calibrated），
-`T_split` 2.78 ms（model 估计，该拆法未被实现验证），生产实现 5.32 ms。
+KDA 对两张卡各自已优化的 flash-train mk3（27 个形状，`docs/validation-kda.md`）：
+
+| | gfx936 | gfx938 |
+|---|---:|---:|
+| 下限违例 | 0 / 27 | 0 / 27 |
+| `T_split`（生产拆法 p82）/ 实测，中位 | 0.56 | 0.48 |
+| 误差：不校准 / 用另一张卡标定 / 同卡留一形状标定（中位） | 44% / 18% / 5.5% | 52% / 16% / 6.8% |
+| Spearman | 0.99 | 0.996 |
+
+流式 kernel 离下限 0.6–0.8；以小三角乘积、递推为主的 kernel 只到 0.37–0.55（缺「满载下限」那一层：kernel 内部的指令级开销）。
 
 结论口径：**`T_bound` 和瓶颈类型可以信；`T_theory` / `T_split` 的绝对值只在验证过的 shape 类别上可信。**
 
@@ -101,9 +109,9 @@ opceil/ops/        算子插件：gemm、elementwise / rmsnorm / softmax、atten
 opceil/frontends/  torch meta 自动推导（opceil trace）
 opceil/calibrate/  在真卡上生成机器文件的微基准
 machines/          内置机器文件：gfx936-bw1000、gfx938-bw1102
-bench/             卡上运行的测量脚本（只依赖 PyTorch）：gemm_sweep（含 --tunableop）、kernel_floor、ld_pad
+bench/             卡上运行的测量脚本：gemm_sweep（含 --tunableop）、kernel_floor、ld_pad（只依赖 PyTorch），kda_bench（需 flash-train）
 data/              验证数据：kernel 级 GEMM 扫描、BW1000 训练 profile、KDA ceiling cards
 reports/           opceil check 的核对报告
-docs/              plugin-guide、validation-gemm；devlog/ 是迁移前的设计与里程碑记录
+docs/              plugin-guide、validation-gemm、validation-kda；devlog/ 是迁移前的设计与里程碑记录
 tests/             pytest
 ```
