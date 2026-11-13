@@ -57,6 +57,7 @@ class CapOp:
     ctas: int = 0                   # tiles of work the op's parallel structure gives (its grid)
     flops: float = 0.0
     other: dict = field(default_factory=dict)
+    other_model: tuple = ()         # keys of `other` that are implementation assumptions (see Work.other_model)
     serial: list = field(default_factory=list)
 
 
@@ -251,6 +252,7 @@ def kernel_work(graph: CapGraph, kernel: list, produced_elsewhere: dict = None, 
     for o in kernel:
         for k, v in o.other.items():
             w.other[k] = w.other.get(k, 0.0) + v
+    w.other_model = tuple(sorted({k for o in kernel for k in o.other_model}))
     w.bytes_min = rd + wr
     if graph.tiles:
         lds = sum(o.core_lds for o in kernel) + sum(graph.tile_tensor(t).on_chip()[0]
@@ -397,9 +399,11 @@ def solve(mach, op_name: str, shape: dict, dtype: str, phase: str,
                          "exceeds the on-chip capacity or exceeds the device-memory budget (%s).  The "
                          "operator cannot run on this machine as described." % (op_name, mach.id, budget_src))
     best = min(priced, key=lambda f: f["T_split_us"])
-    t_theory_us = _predict(mach, op_name, shape, dtype, phase)["T_theory_us"]
+    pr = _predict(mach, op_name, shape, dtype, phase)
+    t_theory_us = pr["T_theory_us"]
     ceil = ceiling.report(mach, op_name, dtype, peak_key, peak, t_theory_us, best,
-                          [r for f in priced for r in f["feasible_rows"]], priced)
+                          [r for f in priced for r in f["feasible_rows"]], priced,
+                          t_bound_us=pr["T_bound_us"], theory_class=pr["T_theory_class"])
     for f in per_form:
         f.pop("feasible_rows", None)
     ledger = _rounds.run(all_rows, ceil, budget)
@@ -481,9 +485,14 @@ def markdown(r: dict) -> str:
     c = r["ceiling"]
     L += ["", "## attainable ceiling", "",
           "| step | time | what it adds |", "| --- | ---: | --- |",
-          "| T_theory | %.3f ms | the resource floor of the required work alone |" % (c["T_theory_us"] / 1e3),
+          "| T_bound | %.3f ms | **provable**: required work over the peaks, nothing assumed |" % (
+              c["T_bound_us"] / 1e3),
+          "| T_theory | %.3f ms | fused work with model / calibrated terms (binding term: %s) |" % (
+              c["T_theory_us"] / 1e3, c["T_theory_class"]),
           "| x O_handoff = %.2f | | the kernel split the on-chip capacity forces |" % c["O_handoff"],
-          "| T_split | %.3f ms | best feasible split of the best formulation |" % (c["T_split_us"] / 1e3),
+          "| T_split | %.3f ms | **model estimate**: best split inside the plugin's search space, with "
+          "feasibility from the estimated LDS / register footprint -- a split outside that space, or a "
+          "smaller real footprint, can be faster |" % (c["T_split_us"] / 1e3),
           "| x O_idle = %s | | %s |" % ("%.3f" % c["O_idle"] if c["O_idle"] else "(not calibrated)",
                                         "measured stalls this card loses beyond the model" if c["O_idle"]
                                         else "NOT in this number: see the note below"),

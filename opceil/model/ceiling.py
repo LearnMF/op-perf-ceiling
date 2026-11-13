@@ -101,7 +101,8 @@ def levels(flops: float, bytes_by_level: dict, best_bytes_by_level: dict, mach, 
 
 
 def report(mach, op_name: str, dtype: str, peak_key: str, peak: float, t_theory_us: float,
-           best: dict, feasible_rows: list, formulations: list) -> dict:
+           best: dict, feasible_rows: list, formulations: list, t_bound_us: float | None = None,
+           theory_class: str = "model") -> dict:
     """The attainable ceiling of the best candidate, with every step of the chain attributed."""
     t_split = best["T_split_us"]
     eff = float(mach.structural.get("mmac_tile_eff", 1.0)) if "mmac_tile_eff" in mach.structural else 1.0
@@ -126,7 +127,10 @@ def report(mach, op_name: str, dtype: str, peak_key: str, peak: float, t_theory_
         notes.append("attainable.idle = %.3f for %s on %s (%s): a calibration of this card and this "
                      "operator family, not a general coefficient." % (idle, op_name, mach.id, src))
     return {"capability": capability(mach),
-            "T_theory_us": t_theory_us, "T_split_us": t_split, "T_attain_us": t_attain,
+            "T_bound_us": t_bound_us if t_bound_us is not None else t_theory_us,
+            "T_theory_class": theory_class,
+            "T_theory_us": t_theory_us, "T_split_us": t_split, "T_split_class": "model",
+            "T_attain_us": t_attain,
             "O_handoff": t_split / t_theory_us if t_theory_us else None,
             "O_idle": idle,
             "band_us": [t_split, t_attain],

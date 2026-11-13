@@ -74,6 +74,10 @@ class Work:
     barriers: tuple = ()
     # Per-resource extra work the operator cannot avoid, e.g. {"sfu_exp2": 1.2e9}.
     other: dict = field(default_factory=dict)
+    # Keys of `other` whose amount rests on an assumption about the implementation (e.g. how many lane-ops
+    # pack two to a slot) rather than on the algorithm: their terms are reported as model estimates and
+    # left out of the provable T_bound.
+    other_model: tuple = ()
     notes: list = field(default_factory=list)
     # Kernels that run back to back on one stream.  When set, the bound is the sum of
     # each kernel's own bound (they cannot overlap), which is tighter than bounding the
@@ -96,6 +100,7 @@ class Work:
             w.serial += p.serial
             for k, v in p.other.items():
                 w.other[k] = w.other.get(k, 0.0) + v
+            w.other_model = tuple(sorted(set(w.other_model) | set(p.other_model)))
             w.notes += [n for n in p.notes if n not in w.notes]
         return w
 

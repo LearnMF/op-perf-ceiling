@@ -22,6 +22,9 @@ from . import kda_ir as ir
 C, D = 64, 128
 SCAN_CTAS_PER_HEAD = D // 32          # one CTA per (head, 32-column V slab)
 VALU_PACKED = 0.75                    # half the lane-ops are packable fp32 pairs (2 per slot)
+# VALU_PACKED is an assumption about the implementation's instruction selection, not a property of the
+# algorithm, so the vector lane-op term it scales is a model estimate (kept out of the provable T_bound).
+OTHER_MODEL = ("valu_lane",)
 
 
 def _required_bytes(save_h: bool) -> dict:
@@ -72,7 +75,7 @@ class Kda(Op):
         ph = [p for p in ("fwd", "bwd") if p in want]
         w = Work(flops=flops, bytes_rd=sum(rq["rd"][p] for p in ph) * N,
                  bytes_wr=sum(rq["wr"][p] for p in ph) * N, compute_eff="mmac_tile_eff", vmem_issue=True,
-                 other={"valu_lane": VALU_PACKED * lanes, "sfu_exp2": sfu},
+                 other={"valu_lane": VALU_PACKED * lanes, "sfu_exp2": sfu}, other_model=OTHER_MODEL,
                  serial=[(nt, _step_key(o), 1) for o in ops if o.par.startswith("scan")])
         w.bytes_min = w.bytes_rd + w.bytes_wr
         w.working_set = float(2 * D * D * 4)       # one head's fp32 state + its gradient must stay on chip
@@ -96,7 +99,7 @@ class Kda(Op):
         flops, lanes, sfu = _ops_work(ops, N)
         w = Work(flops=flops, bytes_rd=rd * N + rdh * H, bytes_wr=wr * N + wrh * H,
                  compute_eff="mmac_tile_eff", vmem_issue=True,
-                 other={"valu_lane": VALU_PACKED * lanes, "sfu_exp2": sfu},
+                 other={"valu_lane": VALU_PACKED * lanes, "sfu_exp2": sfu}, other_model=OTHER_MODEL,
                  serial=[(T // C, _step_key(o), H * SCAN_CTAS_PER_HEAD) for o in ops if o.par.startswith("scan")])
         if k.name == "fwd_h_o" and any(m.tensor == "h" for m in k.writes):
             w.serial = [(T // C, "kda_step_with_o", H * SCAN_CTAS_PER_HEAD)]
@@ -296,7 +299,7 @@ def capacity_graph(shape: dict, phase: str = "fwd+bwd", residency_mode: str = "s
             barrier=o.par.startswith("scan") or o.par == "reduce_T",
             core_lds=_core_lds(o), core_reg_bytes=_core_regs(o),
             movable=_operands(o) if vgpr_mode == "full" else (), flops=flops,
-            other={"valu_lane": VALU_PACKED * lanes, "sfu_exp2": sfu}, phase=o.phase,
+            other={"valu_lane": VALU_PACKED * lanes, "sfu_exp2": sfu}, other_model=OTHER_MODEL, phase=o.phase,
             serial=[(nt, _step_key(o), H * SCAN_CTAS_PER_HEAD)] if o.par.startswith("scan") else [],
             ctas=_ctas(o, nt, H)))
     return CapGraph(ops=cops, tensors=tensors, threads=THREADS, tiles=nt * H,

@@ -173,21 +173,47 @@ class TheoryMachine:
         return key, self.peaks[key]
 
 
-def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float) -> dict:
-    t = {}
-    con = mach.concurrency(w.occupancy) if (w.occupancy and mach.use_occupancy) else {}
+# How far each term can be trusted.  A term is only as strong as its weakest input:
+#   bound       required work fixed by the algorithm / the plugin's dataflow, over a peak no kernel exceeds
+#               (or a generic measured latency every step of a declared dependency chain must expose)
+#   model       depends on an assumption about how the kernel is built or scheduled: occupancy, latency
+#               hiding, barrier exposure, LDS staging of a chosen tiling, separate read/write peaks
+#   calibrated  uses a machine constant measured with an operator-shaped microbenchmark
+#               (structural.mmac_tile_eff / vmem_cycles_per_kb / recurrence_step_us)
+TERM_CLASSES = ("bound", "model", "calibrated")
+_RANK = {c: i for i, c in enumerate(TERM_CLASSES)}
+
+
+def weakest(*classes: str) -> str:
+    """The class of a quantity built from several terms: the weakest of them."""
+    return max(classes or ("bound",), key=lambda c: _RANK[c])
+
+
+def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float, strict: bool = False,
+           cls: dict | None = None) -> dict:
+    """Per-resource lower-bound terms of one kernel, in seconds.
+
+    `strict` keeps only the terms of class `bound`, each at its provable value (no tile efficiency, no
+    occupancy scaling, the best HBM stream bandwidth, the generic dependent-step floor): their max is a
+    lower bound no implementation can beat under the machine file's peaks.  `cls`, when given, is filled
+    with the class of every term returned."""
+    t, c = {}, {}
+    con = {} if strict else (mach.concurrency(w.occupancy) if (w.occupancy and mach.use_occupancy) else {})
     # A kernel with fewer tiles of work than the device has CUs can only occupy that many CUs, so the
     # per-CU resources (matrix and vector pipes, LDS, memory issue) are available to it in that
     # fraction only.  Device-level resources (HBM, L2) are not scaled this way; HBM gets the measured
     # bandwidth-vs-CTAs curve instead.
     cu_frac = min(1.0, con["cus_used"] / mach.cus) if con.get("cus_used") and mach.cus else 1.0
+    scaled = "model" if cu_frac < 1.0 else "bound"
     if w.flops:
-        eff = float(mach.structural.get(w.compute_eff, 1.0)) if w.compute_eff else 1.0
+        use_eff = (not strict) and bool(w.compute_eff) and w.compute_eff in mach.structural
+        eff = float(mach.structural[w.compute_eff]) if use_eff else 1.0
         t["compute:" + peak_key] = w.flops / (peak * eff * cu_frac)
+        c["compute:" + peak_key] = weakest(scaled, "calibrated" if use_eff else "bound")
     if w.bytes_min or w.bytes_rd:
         if not mach.bw:
             raise SystemExit("machine %s has no HBM bandwidth peak" % mach.id)
-        if w.bytes_rd is not None and "hbm_read" in mach.peaks and "hbm_write" in mach.peaks:
+        if (not strict) and w.bytes_rd is not None and "hbm_read" in mach.peaks and "hbm_write" in mach.peaks:
             # A kernel with too few resident CTAs cannot reach the streaming peak even in principle:
             # charge its reads at the bandwidth measured at that CTA count.  Writes are left at the
             # peak, because no write-vs-CTA curve was measured -- under-charging keeps the bound below.
@@ -197,29 +223,41 @@ def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float) -> dict:
                 if at:
                     bw_rd = min(bw_rd, at)
             t["memory:hbm"] = w.bytes_rd / bw_rd + (w.bytes_wr or 0.0) / mach.peaks["hbm_write"]
+            # reads and writes serialised at their own peaks, and the CTA curve: assumptions
+            c["memory:hbm"] = "model"
         else:
-            t["memory:hbm"] = w.bytes_min / mach.bw
+            t["memory:hbm"] = (w.bytes_min or (w.bytes_rd or 0.0) + (w.bytes_wr or 0.0)) / mach.bw
+            c["memory:hbm"] = "bound"
         # multi-level roofline: the same required-bytes argument one level in.  Every HBM byte
         # also crosses L2, so bytes_l2 defaults to the HBM traffic; LDS traffic has to be declared
         # by the operator (staged tiles) or the level is left out.
-        lvl = {"l2": (w.bytes_l2 if w.bytes_l2 is not None else w.bytes_min, "l2_read"),
-               "lds": (w.bytes_lds, "lds_read")}
-        for name, (b, key) in lvl.items():
+        lvl = {"l2": (w.bytes_l2 if w.bytes_l2 is not None else w.bytes_min, "l2_read", "bound"),
+               "lds": (w.bytes_lds, "lds_read", "model")}
+        for name, (b, key, k) in lvl.items():
+            if strict and k != "bound":
+                continue
             if b and key in mach.peaks:
                 t["memory:" + name] = b / (mach.peaks[key] * (cu_frac if name == "lds" else 1.0))
+                c["memory:" + name] = k
         vm = mach.structural.get("vmem_cycles_per_kb")
-        if w.vmem_issue and vm and mach.cus and w.bytes_rd is not None:
+        if (not strict) and w.vmem_issue and vm and mach.cus and w.bytes_rd is not None:
             t["issue:vmem"] = (w.bytes_rd / 1024 * vm["read"] + (w.bytes_wr or 0.0) / 1024 * vm["write"]) \
                 / (mach.cus * cu_frac * mach.clk)
+            c["issue:vmem"] = "calibrated"
     if con.get("in_flight_bytes_per_cu") and mach.cus and w.bytes_rd and mach.latency_s.get("gmem_hbm_ws"):
         # Little's law the other way round: the bytes a CU must read, at the rate its own in-flight
         # window and the measured memory latency allow.  Independent of bandwidth: it is what the
         # kernel's own parallelism cannot hide.
         t["latency:hbm"] = (w.bytes_rd / mach.cus) * mach.latency_s["gmem_hbm_ws"] \
             / con["in_flight_bytes_per_cu"]
+        c["latency:hbm"] = "model"
     for res, amount in w.other.items():
+        est = res in w.other_model
+        if strict and est:
+            continue
         if res in mach.peaks:
             t["other:" + res] = amount / (mach.peaks[res] * cu_frac)
+            c["other:" + res] = weakest(scaled, "model" if est else "bound")
     if w.barriers and con.get("ctas_per_cu"):
         # Every value a kernel passes between its ops through LDS (or spills and reads back) costs the
         # whole block a barrier before the consumer may read it, once per tile of work.  The waves of
@@ -230,41 +268,50 @@ def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float) -> dict:
         if lat and mach.cus:
             tiles_per_cu = max(1.0, -(-int(w.occupancy["ctas"]) // mach.cus))
             t["sync:barrier"] = tiles_per_cu / max(1.0, con["ctas_per_cu"]) * n * lat
+            c["sync:barrier"] = "model"
     if w.serial:
         thr = int((w.occupancy or {}).get("threads") or mach.device.get("warp_size", 64) or 64)
         floor = mach.dep_step_s(thr)
-        ch, missing, generic = 0.0, [], []
+        ch, missing, generic, calibrated = 0.0, [], [], False
         for steps, key, ctas in w.serial:
-            s = mach.step_s(key, ctas)
+            s = None if strict else mach.step_s(key, ctas)
             if s is None and floor is None:
                 missing.append(key)
                 continue
             if s is None:
                 generic.append(key)
+            elif s > (floor or 0.0):
+                calibrated = True
             ch += steps * max(s or 0.0, floor or 0.0)
-        if missing:
-            w.notes.append("machine %s has no recurrence_step_us for %s and no measured dependent-MMAC "
-                           "or barrier latency: the serial chain is NOT in this bound"
-                           % (mach.id, ",".join(sorted(set(missing)))))
-        if generic:
-            w.notes.append("machine %s has no recurrence_step_us for %s: the serial chain uses the "
-                           "generic floor of one dependent MMAC + one barrier per step (%.0f ns), which "
-                           "is looser than a calibrated step" % (mach.id, ",".join(sorted(set(generic))),
-                                                                 (floor or 0.0) * 1e9))
+        if not strict:
+            if missing:
+                w.notes.append("machine %s has no recurrence_step_us for %s and no measured dependent-MMAC "
+                               "or barrier latency: the serial chain is NOT in this bound"
+                               % (mach.id, ",".join(sorted(set(missing)))))
+            if generic:
+                w.notes.append("machine %s has no recurrence_step_us for %s: the serial chain uses the "
+                               "generic floor of one dependent MMAC + one barrier per step (%.0f ns), which "
+                               "is looser than a calibrated step" % (mach.id, ",".join(sorted(set(generic))),
+                                                                     (floor or 0.0) * 1e9))
         if ch:
             t["serial:chain"] = ch
+            c["serial:chain"] = "calibrated" if calibrated else "bound"
     t["fixed:launch"] = w.kernels * mach.launch_us * 1e-6
+    c["fixed:launch"] = "bound"
+    if cls is not None:
+        cls.update(c)
     return t
 
 
-def _bound(mach: TheoryMachine, parts: list, peak_key: str, peak: float) -> tuple:
+def _bound(mach: TheoryMachine, parts: list, peak_key: str, peak: float, strict: bool = False) -> tuple:
     """Kernels back to back on one stream: each bounded by its own binding term, summed."""
     rows, by_binding, terms = [], {}, {}
     for name, pw in parts:
-        t = _terms(mach, pw, peak_key, peak)
+        c = {}
+        t = _terms(mach, pw, peak_key, peak, strict=strict, cls=c)
         b = max(t, key=t.get)
-        rows.append({"kernel": name, "binding": b, "T_us": t[b] * 1e6,
-                     "terms_us": {k: v * 1e6 for k, v in t.items()}})
+        rows.append({"kernel": name, "binding": b, "binding_class": c[b], "T_us": t[b] * 1e6,
+                     "terms_us": {k: v * 1e6 for k, v in t.items()}, "terms_class": c})
         by_binding[b] = by_binding.get(b, 0.0) + t[b]
         for k, v in t.items():
             terms[k] = terms.get(k, 0.0) + v
@@ -279,6 +326,13 @@ def predict(mach: TheoryMachine, op_name: str, shape: dict, dtype: str, phase: s
     # A sequence of kernels on one stream: each is bounded by its own binding term and
     # the bounds add.  A single kernel is the one-part case.
     t_theory, rows, by_binding, terms = _bound(mach, w.parts or [(op_name, w)], peak_key, peak)
+    # The same work with only the provable terms: what no implementation can beat under these peaks.
+    t_bound, brows, bbind, _ = _bound(mach, w.parts or [(op_name, w)], peak_key, peak, strict=True)
+    term_class = {}
+    for row in rows:
+        for k, c in row["terms_class"].items():
+            term_class[k] = weakest(term_class.get(k, "bound"), c)
+    theory_class = weakest(*(row["binding_class"] for row in rows))
     splits = {}
     for sname, sparts in w.splits.items():
         ts, srows, sbb, _ = _bound(mach, sparts, peak_key, peak)
@@ -322,14 +376,20 @@ def predict(mach: TheoryMachine, op_name: str, shape: dict, dtype: str, phase: s
         "binding": binding,
         "bottleneck": binding.split(":")[0],
         "T_theory_us": t_theory * 1e6,
+        "T_theory_class": theory_class,
+        "T_bound_us": t_bound * 1e6,
+        "T_bound_binding": max(bbind, key=bbind.get),
+        "term_class": term_class,
         "T_split": splits,
         "ceiling": {
             "mfu_pct": 100.0 * (w.flops / peak) / t_theory if t_theory else 0.0,
             "bw_util_pct": 100.0 * (w.bytes_min / mach.bw) / t_theory if (t_theory and mach.bw) else 0.0,
         },
         "notes": list(w.notes),
-        "disclaimer": "T_theory is a lower bound on time under this machine's peaks; it is "
-                      "not a runtime any implementation is guaranteed to reach.",
+        "disclaimer": "T_bound is a lower bound on time under this machine's peaks (provable terms only). "
+                      "T_theory adds model-estimate and calibrated terms, so it is tighter but rests on their "
+                      "assumptions; T_split is the best split inside the plugin's search space under the "
+                      "capacity estimate.  None of them is a runtime any implementation is guaranteed to reach.",
     }
     out["notes"].insert(0, _why(out))
     return out
@@ -352,7 +412,9 @@ def markdown(r: dict) -> str:
          "| required HBM bytes | %.3f MB |" % (r["work"]["bytes_min"] / 1e6),
          "| arithmetic intensity | %.1f flop/byte |" % r["arithmetic_intensity_flop_per_byte"],
          "| ridge point | %.1f flop/byte |" % r["ridge_point_flop_per_byte"],
-         "| **T_theory** | **%.3f us** |" % r["T_theory_us"],
+         "| **T_bound** (provable terms only) | **%.3f us** (%s) |" % (r["T_bound_us"], r["T_bound_binding"]),
+         "| **T_theory** (+ model / calibrated terms) | **%.3f us** (binding term: %s) |" % (
+             r["T_theory_us"], r["T_theory_class"]),
          "| bottleneck | %s (%s) |" % (r["bottleneck"], r["binding"]),
          "| ceiling MFU | %.1f%% |" % r["ceiling"]["mfu_pct"],
          "| ceiling HBM utilisation | %.1f%% |" % r["ceiling"]["bw_util_pct"], "",
@@ -363,15 +425,19 @@ def markdown(r: dict) -> str:
         L.append("| %s | %.0f GB/s | %.1f MB | %.1f | %.1f | %.1f us | %s |" % (
             name, lv["bw_GBps"], lv["bytes"] / 1e6, lv["intensity_flop_per_byte"],
             lv["ridge_flop_per_byte"], lv["T_us"], lv["bound"]))
+    tc = r.get("term_class", {})
     L += ["",
-         "## per-kernel bound", "", "| kernel | binding | T_us | " +
-         " | ".join(sorted(r["terms_us"])) + " |",
+         "## per-kernel bound", "",
+         "term class: `bound` = required work over a peak (provable); `model` = rests on an assumption about "
+         "the implementation; `calibrated` = uses an operator-shaped measured constant.", "",
+         "| kernel | binding | T_us | " +
+         " | ".join("%s [%s]" % (k, tc.get(k, "?")) for k in sorted(r["terms_us"])) + " |",
          "| --- | --- | ---: |" + " ---: |" * len(r["terms_us"])]
     for row in r["kernels"]:
         L.append("| %s | %s | %.3f | " % (row["kernel"], row["binding"], row["T_us"]) +
                  " | ".join("%.3f" % row["terms_us"].get(k, 0.0) for k in sorted(r["terms_us"])) + " |")
     for sname, sp in r.get("T_split", {}).items():
-        L += ["", "## T_split: decomposition `%s` -- %.3f us (O_handoff = T_split / T_theory = %.2f, "
+        L += ["", "## T_split (model estimate): decomposition `%s` -- %.3f us (O_handoff = T_split / T_theory = %.2f, "
               "interface bytes %.1f MB = %.2fx required)" % (
                   sname, sp["T_split_us"], sp["O_handoff"], sp["bytes"] / 1e6,
                   sp["bytes"] / max(1.0, r["work"]["bytes_min"])), "",
