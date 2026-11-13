@@ -6,6 +6,7 @@ import sys
 COMMANDS = {
     "predict": "opceil.model.pcli",
     "validate": "opceil.model.validate",
+    "trace": "opceil.frontends.tcli",
     "calibrate": "opceil.calibrate.run",
 }
 

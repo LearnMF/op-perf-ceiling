@@ -318,9 +318,10 @@ def _bound(mach: TheoryMachine, parts: list, peak_key: str, peak: float, strict:
     return sum(by_binding.values()), rows, by_binding, terms
 
 
-def predict(mach: TheoryMachine, op_name: str, shape: dict, dtype: str, phase: str) -> dict:
-    op = get(op_name)
-    w: Work = op.work(shape, dtype, phase)
+def predict(mach: TheoryMachine, op_name: str, shape: dict, dtype: str, phase: str,
+            work: Work | None = None) -> dict:
+    """`work` given: price that work under `op_name` instead of asking the plugin (front ends use this)."""
+    w: Work = work if work is not None else get(op_name).work(shape, dtype, phase)
     peak_key, peak = mach.compute_peak(dtype)
 
     # A sequence of kernels on one stream: each is bounded by its own binding term and

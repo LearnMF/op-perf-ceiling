@@ -142,9 +142,9 @@ class Op:
 
 
 def registry() -> dict:
-    from . import elementwise, gemm, kda
+    from . import attention, elementwise, gemm, kda
     ops = {}
-    for mod in (gemm, elementwise, kda):
+    for mod in (gemm, elementwise, attention, kda):
         for op in mod.OPS:
             ops[op.name] = op
     return ops

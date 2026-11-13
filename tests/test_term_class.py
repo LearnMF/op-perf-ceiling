@@ -13,6 +13,8 @@ CASES = [
     ("gemm", {"M": 1, "N": 256, "K": 6144}, "fwd"),
     ("rmsnorm", {"elements": 2 ** 26}, "fwd+bwd"),
     ("softmax", {"elements": 2 ** 24}, "fwd"),
+    ("attention", {"B": 1, "H": 32, "S": 8192, "D": 128, "causal": 1}, "fwd"),
+    ("attention", {"B": 64, "H": 128, "Hkv": 8, "S": 1, "Skv": 16384, "D": 128}, "fwd"),
     ("kda", {"T": 16384, "H": 12}, "fwd+bwd"),
     ("kda", {"T": 8192, "H": 48}, "fwd"),
 ]
