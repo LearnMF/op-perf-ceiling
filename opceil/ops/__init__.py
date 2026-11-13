@@ -78,6 +78,10 @@ class Work:
     # pack two to a slot) rather than on the algorithm: their terms are reported as model estimates and
     # left out of the provable T_bound.
     other_model: tuple = ()
+    # Terms a model-layer solver has already priced for this kernel (seconds), e.g. the wave-quantised
+    # compute time or the K-loop dependency chain of one tiling.  Always class `model`: they rest on the
+    # decomposition the solver chose, so they never enter T_bound.
+    extra_terms: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
     # Kernels that run back to back on one stream.  When set, the bound is the sum of
     # each kernel's own bound (they cannot overlap), which is tighter than bounding the

@@ -38,5 +38,15 @@ class Gemm(Op):
                            "fixed-cost floor rather than either roofline to bind" % min(m, n))
         return w
 
+    def gemm_parts(self, shape: dict, dtype: str, phase: str) -> list:
+        """[(name, m, n, k, in bytes, out bytes)]: the GEMMs of this phase, for the tiling solver
+        (opceil.model.tiling), which prices each as a grid of output tiles."""
+        m, n, k = (int(shape[x]) for x in ("M", "N", "K"))
+        e = dtype_bytes(dtype)
+        out_e = max(e, 2)
+        fwd = [("fwd C=A@B", m, n, k, e, out_e)]
+        bwd = [("bwd dA=dC@B^T", m, k, n, out_e, out_e), ("bwd dB=A^T@dC", k, n, m, out_e, out_e)]
+        return {"fwd": fwd, "bwd": bwd, "fwd+bwd": fwd + bwd}[phase]
+
 
 OPS = (Gemm(),)

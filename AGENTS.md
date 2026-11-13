@@ -16,3 +16,8 @@
 - gfx938 / BW1102: node `nmz5`, container `tanbo_kda_nmz` (stopped by default: `docker start` it, `docker stop` it afterwards) (DTK 26.10, torch 2.11), home mounted at `/public4/home/tanbo`. Check `hy-smi` for an idle card first; run `bench/gemm_sweep.py` with `HIP_VISIBLE_DEVICES=<idle card>` inside the container after `source /opt/dtk/env.sh`.
 - gfx936 / BW1000: node `bw52` (ssh via `bw-zz`), running container `tanbo_mg2610` (DTK 26.10, torch 2.11), home `/public/home/tanbo`. (`bw7` from the old repo is gone.)
 - Committed sweeps go to `data/measured/gemm_<dtype>_<machine id>_<date>.jsonl`; `tests/test_check.py` picks them up automatically.
+
+## Peaks and the GEMM tiling model
+- `T_bound` is priced at datasheet peaks (`peaks_bound` in `TheoryMachine`); a measured peak is only the best a kernel has reached. If any measured kernel beats a measured peak, raise `value` to it, keep the old one in `microbench_value`, and record the source in `_observed`.
+- `opceil/model/tiling.py` prices GEMMs as tile grids (`T_split["tiled"]`); its assumptions live in `docs/devlog/constant-ledger.md`. Do not tune them against `data/measured/`; `tests/test_check.py` requires `T_split <= measured` on every committed sweep.
+- Card-side scripts: `bench/gemm_sweep.py` (`--tunableop` = best of all hipBLASLt/rocBLAS solutions, ~30 s per shape; use `--max-gflop 50`), `bench/kernel_floor.py`, `bench/ld_pad.py`.

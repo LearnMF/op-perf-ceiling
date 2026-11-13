@@ -368,6 +368,11 @@
     "launch_single": {
       "best_us": 6.72,
       "median_us": 6.88
+    },
+    "kernel_min": {
+      "best_us": 1.919,
+      "median_us": 2.079,
+      "_provenance": "bench/kernel_floor.py on nmz5, 2026-11-13: shortest device duration of trivial add_/fill_/copy_ kernels (4 B - 64 KiB), torch.profiler; the floor every kernel pays"
     }
   },
   "pcie_GBps": {

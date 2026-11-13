@@ -29,7 +29,7 @@
   },
   "peaks": {
     "hbm_read": {
-      "value": 1339.2,
+      "value": 1365.6,
       "median_of_best_config": 1284.9,
       "config": {
         "bytes_per_pass": 1073741824,
@@ -40,7 +40,9 @@
       "n_configs": 16,
       "unit": "GB/s",
       "theoretical": 1843.2,
-      "pct_of_theoretical": 72.7
+      "pct_of_theoretical": 74.1,
+      "microbench_value": 1339.2,
+      "_observed": "2026-11-13: raised from the microbenchmark's 1339.2 GB/s to 1365.6 GB/s, the bandwidth a hipBLASLt GEMM (M=32,N=24576,K=6144 bf16, TunableOp best solution, bw52) sustained streaming B (data/measured/gemm_bf16_gfx936-bw1000_20261113_tunableop.jsonl).  A measured peak is the best any kernel has reached; the microbenchmark value is kept in microbench_value."
     },
     "hbm_read_nt": {
       "value": 1309.4,
@@ -376,6 +378,11 @@
     "launch_single": {
       "best_us": 6.4,
       "median_us": 8.16
+    },
+    "kernel_min": {
+      "best_us": 1.599,
+      "median_us": 1.919,
+      "_provenance": "bench/kernel_floor.py on bw52, 2026-11-13: shortest device duration of trivial add_/fill_/copy_ kernels (4 B - 64 KiB), torch.profiler; the floor every kernel pays"
     }
   },
   "pcie_GBps": {

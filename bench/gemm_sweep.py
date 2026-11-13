@@ -11,6 +11,10 @@ What is timed is C = A @ B (torch.matmul -> the vendor BLAS) in bf16, one shape 
                  launch more than one kernel, e.g. split-K + reduction); absent if the profiler gives nothing.
 The A/B/C buffers rotate over enough sets that the inputs are not L2-resident between calls (the bound charges
 HBM bytes; a warm L2 would let a small GEMM beat it legitimately and say nothing about the model).
+
+--tunableop: PyTorch TunableOp times every hipBLASLt / rocBLAS solution for each shape and keeps the fastest, so
+the row is the best the vendor libraries have rather than their default pick.  A gap that survives it is not a
+library heuristic choosing badly.
 """
 from __future__ import annotations
 
@@ -19,9 +23,15 @@ import json
 import os
 import platform
 import socket
+import sys
 import time
 
-import torch
+if "--tunableop" in sys.argv:                   # must be set before torch initialises its BLAS handles
+    os.environ.setdefault("PYTORCH_TUNABLEOP_ENABLED", "1")
+    os.environ.setdefault("PYTORCH_TUNABLEOP_TUNING", "1")
+    os.environ.setdefault("PYTORCH_TUNABLEOP_VERBOSE", "0")
+
+import torch  # noqa: E402
 
 # (N, K) of the projection shapes used in practice (LLaMA / DeepSeek / Qwen families, PV sheet), swept over M.
 NK = [(4096, 4096), (4096, 11008), (11008, 4096), (6144, 2048), (4096, 6144), (6144, 12288),
@@ -98,14 +108,17 @@ def main() -> int:
     p.add_argument("--l2-bytes", type=int, default=8 << 20)
     p.add_argument("--no-profile", action="store_true")
     p.add_argument("--limit", type=int, default=0, help="first N shapes only (smoke test)")
+    p.add_argument("--tunableop", action="store_true", help="best of all hipBLASLt / rocBLAS solutions per shape")
+    p.add_argument("--max-gflop", type=float, default=0.0, help="skip shapes above this many GFLOP (0 = all)")
     a = p.parse_args()
     dtype = getattr(torch, a.dtype)
     prop = torch.cuda.get_device_properties(0)
     meta = {"host": socket.gethostname(), "device": prop.name, "arch": getattr(prop, "gcnArchName", ""),
             "cus": prop.multi_processor_count, "torch": torch.__version__, "hip": getattr(torch.version, "hip", None),
             "visible": os.environ.get("HIP_VISIBLE_DEVICES", ""), "python": platform.python_version(),
-            "date": time.strftime("%Y-%m-%d %H:%M:%S")}
-    todo = shapes()[: a.limit or None]
+            "date": time.strftime("%Y-%m-%d %H:%M:%S"), "tunableop": a.tunableop, "max_gflop": a.max_gflop}
+    todo = [sh for sh in shapes() if not a.max_gflop or 2.0 * sh[0] * sh[1] * sh[2] / 1e9 <= a.max_gflop]
+    todo = todo[: a.limit or None]
     with open(a.out, "w") as f:
         f.write(json.dumps({"meta": meta}) + "\n")
         for i, (m, n, k) in enumerate(todo):

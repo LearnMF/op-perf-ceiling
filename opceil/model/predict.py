@@ -32,30 +32,42 @@ class TheoryMachine:
     microbenchmark value.  Both are reported so a prediction always says which it used.
     """
 
-    def __init__(self, m: dict, peaks: str = "measured", occupancy: bool = True):
+    def __init__(self, m: dict, peaks: str = "measured", occupancy: bool = True, tiling: bool = True):
         self.raw = m
         self.use_occupancy = occupancy
+        self.use_tiling = tiling
         self.which = peaks
         self.id = m.get("id") or m.get("device", {}).get("name", "?")
         self.device = m.get("device", {})
         self.peaks = {}
+        # T_bound needs a rate no kernel can exceed.  A measured peak is the best a microbenchmark reached,
+        # i.e. a LOWER estimate of the true peak (a vendor GEMM streamed 1366 GB/s on a card whose HBM
+        # microbenchmark peaked at 1339), so the provable terms use the datasheet value where the machine
+        # file has one, whatever --peaks says; keys without one fall back to the measured value and are listed.
+        self.peaks_bound, self.bound_fallback = {}, []
         for k, v in m.get("peaks", {}).items():
             if not isinstance(v, dict):
                 continue
-            val = v.get("theoretical") if peaks == "theoretical" else None
-            if val is None:
-                val = v.get("value")
-            if val is None:
-                continue
             unit = v.get("unit", "")
             scale = next((s for u, s in RESOURCE_UNITS.items() if unit.startswith(u)), None)
-            if scale is None:
+            if scale is None or v.get("value") is None and v.get("theoretical") is None:
                 continue
+            meas, theo = v.get("value"), v.get("theoretical")
+            val = theo if (peaks == "theoretical" and theo is not None) else (meas if meas is not None else theo)
             self.peaks[k] = float(val) * scale
-        self.bw = max((self.peaks[k] for k in ("hbm_read", "hbm_read_nt", "hbm_write", "hbm_copy")
-                       if k in self.peaks), default=0.0)
+            if theo is not None:
+                self.peaks_bound[k] = max(float(theo), float(meas or 0.0)) * scale
+            else:
+                self.peaks_bound[k] = float(meas) * scale
+                self.bound_fallback.append(k)
+        hbm_keys = ("hbm_read", "hbm_read_nt", "hbm_write", "hbm_copy")
+        self.bw = max((self.peaks[k] for k in hbm_keys if k in self.peaks), default=0.0)
+        self.bw_bound = max((self.peaks_bound[k] for k in hbm_keys if k in self.peaks_bound), default=0.0)
         launch = m.get("launch", {}).get("launch_stream", {})
-        self.launch_us = float(launch.get("best_us", 0.0))
+        # a kernel costs at least one dispatch interval and at least the shortest device duration measured
+        # for a trivial kernel (`launch.kernel_min`, bench/kernel_floor.py), whichever is larger
+        self.launch_us = max(float(launch.get("best_us", 0.0)),
+                             float(m.get("launch", {}).get("kernel_min", {}).get("best_us", 0.0)))
         self.ridge = m.get("ridge_points_flop_per_byte", {})
         self.cus = int(self.device.get("cu_count", 0))
         self.clk = float(self.device.get("clock_khz", 0)) * 1e3
@@ -72,20 +84,26 @@ class TheoryMachine:
                           if isinstance(v, dict) and isinstance(v.get("curve"), dict)}
 
     def bw_at_ctas(self, key: str, ctas: int) -> float | None:
-        """Attainable bandwidth of `key` with `ctas` CTAs resident, interpolated on the measured
-        curve; None when the machine file has no curve for it."""
+        """Attainable bandwidth of `key` with `ctas` CTAs resident, interpolated on the measured curve;
+        None when the machine file has no curve for it.
+
+        The curve gives the SHAPE (how fast bandwidth saturates with resident CTAs); its magnitude is scaled
+        so that saturation equals the streaming peak (`peaks.hbm_read`): the curve's own microbenchmark is
+        one kernel, and a better one reaches the peak with the same parallelism."""
         cur = self.bw_curves.get(key)
         if not cur:
             return None
         xs = sorted(cur)
+        top = max(cur.values())
+        scale = (self.peaks.get("hbm_read", top * 1e9) / 1e9) / top if top else 1.0
         if ctas >= xs[-1]:
-            return cur[xs[-1]] * 1e9
+            return cur[xs[-1]] * scale * 1e9
         if ctas <= xs[0]:
-            return cur[xs[0]] * 1e9 * ctas / xs[0]
+            return cur[xs[0]] * scale * 1e9 * ctas / xs[0]
         hi = next(x for x in xs if x >= ctas)
         lo = max(x for x in xs if x <= ctas)
         f = 0.0 if hi == lo else (ctas - lo) / (hi - lo)
-        return (cur[lo] + f * (cur[hi] - cur[lo])) * 1e9
+        return (cur[lo] + f * (cur[hi] - cur[lo])) * scale * 1e9
 
     def concurrency(self, occ: dict) -> dict:
         """What one kernel can keep in flight on this machine, from the hardware limits only.
@@ -162,6 +180,10 @@ class TheoryMachine:
     def load(cls, path: str, peaks: str = "measured", occupancy: bool = True) -> "TheoryMachine":
         return cls(json.loads(open(path, encoding="utf-8").read()), peaks, occupancy)
 
+    def bound_fallback_for(self, keys) -> list:
+        """Which of these peaks the provable terms had to take from a measurement (no datasheet value)."""
+        return sorted(k for k in keys if k in self.bound_fallback)
+
     def compute_peak(self, dtype: str) -> tuple:
         key = DTYPE_PEAK.get(dtype)
         if key is None:
@@ -205,6 +227,9 @@ def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float, strict: boo
     # bandwidth-vs-CTAs curve instead.
     cu_frac = min(1.0, con["cus_used"] / mach.cus) if con.get("cus_used") and mach.cus else 1.0
     scaled = "model" if cu_frac < 1.0 else "bound"
+    pk = mach.peaks_bound if strict else mach.peaks
+    if strict:
+        peak = mach.peaks_bound.get(peak_key, peak)
     if w.flops:
         use_eff = (not strict) and bool(w.compute_eff) and w.compute_eff in mach.structural
         eff = float(mach.structural[w.compute_eff]) if use_eff else 1.0
@@ -226,7 +251,8 @@ def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float, strict: boo
             # reads and writes serialised at their own peaks, and the CTA curve: assumptions
             c["memory:hbm"] = "model"
         else:
-            t["memory:hbm"] = (w.bytes_min or (w.bytes_rd or 0.0) + (w.bytes_wr or 0.0)) / mach.bw
+            t["memory:hbm"] = (w.bytes_min or (w.bytes_rd or 0.0) + (w.bytes_wr or 0.0)) / (
+                mach.bw_bound if strict else mach.bw)
             c["memory:hbm"] = "bound"
         # multi-level roofline: the same required-bytes argument one level in.  Every HBM byte
         # also crosses L2, so bytes_l2 defaults to the HBM traffic; LDS traffic has to be declared
@@ -236,8 +262,8 @@ def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float, strict: boo
         for name, (b, key, k) in lvl.items():
             if strict and k != "bound":
                 continue
-            if b and key in mach.peaks:
-                t["memory:" + name] = b / (mach.peaks[key] * (cu_frac if name == "lds" else 1.0))
+            if b and key in pk:
+                t["memory:" + name] = b / (pk[key] * (cu_frac if name == "lds" else 1.0))
                 c["memory:" + name] = k
         vm = mach.structural.get("vmem_cycles_per_kb")
         if (not strict) and w.vmem_issue and vm and mach.cus and w.bytes_rd is not None:
@@ -255,8 +281,8 @@ def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float, strict: boo
         est = res in w.other_model
         if strict and est:
             continue
-        if res in mach.peaks:
-            t["other:" + res] = amount / (mach.peaks[res] * cu_frac)
+        if res in pk:
+            t["other:" + res] = amount / (pk[res] * cu_frac)
             c["other:" + res] = weakest(scaled, "model" if est else "bound")
     if w.barriers and con.get("ctas_per_cu"):
         # Every value a kernel passes between its ops through LDS (or spills and reads back) costs the
@@ -298,6 +324,10 @@ def _terms(mach: TheoryMachine, w: Work, peak_key: str, peak: float, strict: boo
             c["serial:chain"] = "calibrated" if calibrated else "bound"
     t["fixed:launch"] = w.kernels * mach.launch_us * 1e-6
     c["fixed:launch"] = "bound"
+    if not strict:
+        for k, v in w.extra_terms.items():
+            t[k] = v
+            c[k] = "model"
     if cls is not None:
         cls.update(c)
     return t
@@ -329,6 +359,21 @@ def predict(mach: TheoryMachine, op_name: str, shape: dict, dtype: str, phase: s
     t_theory, rows, by_binding, terms = _bound(mach, w.parts or [(op_name, w)], peak_key, peak)
     # The same work with only the provable terms: what no implementation can beat under these peaks.
     t_bound, brows, bbind, _ = _bound(mach, w.parts or [(op_name, w)], peak_key, peak, strict=True)
+    # Only the binding term of each kernel sets T_bound, so only its peak has to be a datasheet value; a
+    # non-binding term priced at a (lower) measured peak is overstated but does not move the bound.
+    used = set()
+    for row in brows:
+        b = row["binding"]
+        used |= ({peak_key} if b.startswith("compute:") else
+                 {"hbm_read", "hbm_read_nt", "hbm_write", "hbm_copy"} if b == "memory:hbm" else
+                 {"l2_read"} if b == "memory:l2" else {b.split(":", 1)[1]} if b.startswith("other:") else set())
+    hbm = {"hbm_read", "hbm_read_nt", "hbm_write", "hbm_copy"}
+    fallback = mach.bound_fallback_for(used - hbm) + (
+        ["hbm"] if used & hbm and not (used & hbm) - set(mach.bound_fallback) else [])
+    if fallback:
+        w.notes.append("T_bound uses MEASURED peaks for %s (the machine file has no datasheet value): a kernel can "
+                       "beat it by however far the calibration microbenchmark fell short of the true peak"
+                       % ", ".join(fallback))
     term_class = {}
     for row in rows:
         for k, c in row["terms_class"].items():
@@ -343,6 +388,21 @@ def predict(mach: TheoryMachine, op_name: str, shape: dict, dtype: str, phase: s
                          "kernels": srows,
                          "bytes": sum((pw.bytes_rd or 0) + (pw.bytes_wr or 0) or pw.bytes_min for _, pw in sparts),
                          "binding_share": {k: v / ts for k, v in sbb.items()} if ts else {}}
+    if work is None and hasattr(get(op_name), "gemm_parts") and mach.use_tiling:
+        from . import tiling
+        tiled = [(name,) + (tiling.search(mach, m_, n_, k_, e_, oe_, peak_key, peak),)
+                 for name, m_, n_, k_, e_, oe_ in get(op_name).gemm_parts(shape, dtype, phase)]
+        ts = sum(r["T_us"] for _, r in tiled) * 1e-6
+        share = {}
+        for _, r in tiled:
+            share[r["binding"]] = share.get(r["binding"], 0.0) + r["T_us"] * 1e-6
+        splits["tiled"] = {"T_split_us": ts * 1e6, "O_handoff": ts / t_theory if t_theory else None,
+                           "kernels": [{"kernel": name, "binding": r["binding"], "T_us": r["T_us"],
+                                        "tiling": r["tiling"], "terms_us": r["terms_us"],
+                                        "terms_class": r["terms_class"]} for name, r in tiled],
+                           "bytes": w.bytes_min,
+                           "binding_share": {k: v / ts for k, v in share.items()} if ts else {},
+                           "class": "model"}
     binding = max(by_binding, key=by_binding.get)
     oi = w.flops / w.bytes_min if w.bytes_min else float("inf")
     ridge = peak / mach.bw if mach.bw else float("inf")
@@ -380,6 +440,7 @@ def predict(mach: TheoryMachine, op_name: str, shape: dict, dtype: str, phase: s
         "T_theory_class": theory_class,
         "T_bound_us": t_bound * 1e6,
         "T_bound_binding": max(bbind, key=bbind.get),
+        "T_bound_peaks": "datasheet" if not fallback else "datasheet, measured for " + ",".join(fallback),
         "term_class": term_class,
         "T_split": splits,
         "ceiling": {
@@ -443,7 +504,12 @@ def markdown(r: dict) -> str:
                   sname, sp["T_split_us"], sp["O_handoff"], sp["bytes"] / 1e6,
                   sp["bytes"] / max(1.0, r["work"]["bytes_min"])), "",
               "| kernel | binding | T_us |", "| --- | --- | ---: |"]
-        L += ["| %s | %s | %.1f |" % (k["kernel"], k["binding"], k["T_us"]) for k in sp["kernels"]]
+        for k in sp["kernels"]:
+            tl = k.get("tiling")
+            L.append("| %s | %s | %.1f |" % (k["kernel"] + (
+                " -- tile %dx%dx%d, split-K %d, %d threads, %d stages, %d CTAs, %d waves" % (
+                    tl["Mt"], tl["Nt"], tl["Kt"], tl["split_k"], tl["threads"], tl["stages"], tl["ctas"],
+                    tl["waves"]) if tl else ""), k["binding"], k["T_us"]))
     L += ["", "## notes", ""] + ["- " + n for n in r["notes"]]
     L += ["", "> " + r["disclaimer"], ""]
     return "\n".join(L)

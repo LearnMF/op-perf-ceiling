@@ -33,9 +33,9 @@
 
 | 层 | 含义 | 可信度 | 谁有 |
 |---|---|---|---|
-| `T_bound` | 只用 bound 项：**任何实现都打不破** | 可证明 | 所有算子 |
+| `T_bound` | 只用 bound 项、按**手册峰值**计价：**任何实现都打不破**（没有手册值时退化为实测峰值并在报告中注明） | 可证明 | 所有算子 |
 | `T_theory` | 完全融合、每字节只搬一次，加上 model / calibrated 项 | 取决于用到的项（报告里写明） | 所有算子 |
-| `T_split` | 片上容量约束下，插件搜索空间内的最优拆法 | model 估计 | 有容量图的插件（目前 KDA） |
+| `T_split` | 片上容量约束下，搜索空间内的最优拆法（KDA：kernel 拆分；GEMM：tile 分块） | model 估计 | KDA（容量图）、GEMM（`opceil/model/tiling.py`） |
 | `T_attain` | `T_split` × 实测空等系数 | 需标定 | 标定过的机器 + 算子族 |
 
 报告（markdown，`--out` 时另出 JSON）给出：上述各层、瓶颈资源、算术强度与拐点、分层 roofline 表、MFU 上限、逐项时间及其类别；
@@ -67,22 +67,25 @@ python -m opceil calibrate --out machines/<arch>-<board>.json
 
 ## 现在有多准（2026-11-13）
 
-GEMM 的 kernel 级核对（每张卡 138 个 bf16 shape，`docs/validation-gemm.md`）：
+GEMM 的 kernel 级核对（每张卡 138 个 bf16 shape，另有 104 个 shape 的 TunableOp 库内最优；`docs/validation-gemm.md`）：
 
 | | gfx936 / BW1000（bw52） | gfx938 / BW1102（nmz5） |
 |---|---:|---:|
-| 下限违例 | 0 / 138 | 0 / 138 |
-| Spearman(T_bound, 实测) | 0.981 | 0.983 |
-| η = T_bound / 实测，中位 | 0.67 | 0.57 |
+| `T_bound` 违例（默认库 / 库内最优） | 0 / 0 | 0 / 0 |
+| `T_split`（分块模型）违例 | 0 / 0 | 0 / 0 |
+| Spearman(T_bound, 实测) | 0.98 | 0.98 |
+| `T_split` / 实测，中位（全部 / 拐点附近 / 大 shape） | 0.68 / 0.57 / 0.79 | 0.60 / 0.61 / 0.83 |
 
-- 大 shape 的算力受限、访存受限两端基本是紧的；
-- **拐点附近和总工作量很小的 GEMM 偏乐观 2–8 倍**，两张卡规律一致（凹陷随拐点位置移动）：缺 tile 铺满 / 尾波项、拐点处的重叠项和 kernel 级最小时间项；
-- 2 的幂方阵在两张卡上都明显变慢，疑似 HBM 通道冲突，待确认。
+- 下限在两张卡、两种库选择下都成立；大 shape 两端基本是紧的；
+- 分块模型（尾波、小网格、K 循环延迟、L2 重读）只把拐点附近收紧了约 10 个百分点；
+- **小 shape 和拐点附近仍偏乐观 1.5–6 倍，且库内最优解也填不上**：BLAS 当尺子到这里就分不清「手写能拿到」还是「模型漏项」，
+  下一步要写针对性 kernel 去验证；
+- gfx936 的 2 的幂方阵慢 30–50%，补齐 leading dimension 可拿回（已实测）。
 
 KDA：`T_bound` 0.605 ms（可证明），`T_theory` 0.837 ms（瓶颈是用 KDA 实测步长算的串行链，属 calibrated），
 `T_split` 2.78 ms（model 估计，该拆法未被实现验证），生产实现 5.32 ms。
 
-结论口径：**瓶颈类型和 `T_bound` 可以信；`T_theory` / `T_split` 的绝对值只在验证过的 shape 类别上可信。**
+结论口径：**`T_bound` 和瓶颈类型可以信；`T_theory` / `T_split` 的绝对值只在验证过的 shape 类别上可信。**
 
 ## 接入新算子
 
@@ -93,12 +96,12 @@ L1 样例：`opceil/ops/kda.py` + `kda_ir.py`。
 ## 目录
 
 ```
-opceil/model/      求解器（与算子无关）：predict（下限与项类别）、capacity（拆分搜索）、ceiling、memory、rounds、check、validate
+opceil/model/      求解器（与算子无关）：predict（下限与项类别）、capacity（拆分搜索）、tiling（GEMM 分块）、ceiling、memory、rounds、check、validate
 opceil/ops/        算子插件：gemm、elementwise / rmsnorm / softmax、attention（L0），kda（L1 容量图）
 opceil/frontends/  torch meta 自动推导（opceil trace）
 opceil/calibrate/  在真卡上生成机器文件的微基准
 machines/          内置机器文件：gfx936-bw1000、gfx938-bw1102
-bench/             卡上运行的测量脚本（只依赖 PyTorch）
+bench/             卡上运行的测量脚本（只依赖 PyTorch）：gemm_sweep（含 --tunableop）、kernel_floor、ld_pad
 data/              验证数据：kernel 级 GEMM 扫描、BW1000 训练 profile、KDA ceiling cards
 reports/           opceil check 的核对报告
 docs/              plugin-guide、validation-gemm；devlog/ 是迁移前的设计与里程碑记录

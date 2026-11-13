@@ -43,11 +43,23 @@ def test_strict_terms_are_all_provable(op, shape, phase):
 
 
 def test_plain_gemm_is_all_provable():
-    """No efficiency constant, no occupancy, no read/write split: T_bound is T_theory."""
-    r = predict(TheoryMachine.load(str(MACHINES[0])), "gemm", {"M": 8192, "N": 4096, "K": 6144}, "bf16", "fwd")
-    assert set(r["term_class"].values()) == {"bound"}
-    assert r["T_bound_us"] == pytest.approx(r["T_theory_us"])
-    assert r["T_theory_class"] == "bound"
+    """No efficiency constant, no occupancy, no read/write split: every term is provable.  T_bound prices them at
+    the datasheet peaks (a measured peak is only a lower estimate of the true one), T_theory at the selected
+    peaks, so the two agree exactly under --peaks theoretical."""
+    shape = {"M": 8192, "N": 4096, "K": 6144}
+    r = predict(TheoryMachine.load(str(MACHINES[0])), "gemm", shape, "bf16", "fwd")
+    assert set(r["term_class"].values()) == {"bound"} and r["T_theory_class"] == "bound"
+    assert r["T_bound_us"] == pytest.approx(2 * 8192 * 4096 * 6144 / 491.52e12 * 1e6)
+    assert r["T_bound_peaks"] == "datasheet"
+    t = predict(TheoryMachine.load(str(MACHINES[0]), "theoretical"), "gemm", shape, "bf16", "fwd")
+    assert t["T_bound_us"] == pytest.approx(t["T_theory_us"])
+
+
+def test_bound_says_when_it_falls_back_to_measured_peaks():
+    """gfx938's machine file has no datasheet values: T_bound is then only as strong as the microbenchmark."""
+    r = predict(TheoryMachine.load(str(MACHINES[1])), "gemm", {"M": 8192, "N": 4096, "K": 6144}, "bf16", "fwd")
+    assert r["T_bound_peaks"].startswith("datasheet, measured for") and "mmac_bf16" in r["T_bound_peaks"]
+    assert any("MEASURED peaks" in n for n in r["notes"])
 
 
 def test_kda_serial_bottleneck_rests_on_a_calibrated_constant():

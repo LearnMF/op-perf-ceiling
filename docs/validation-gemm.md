@@ -76,3 +76,72 @@ kernel，如 split-K + 归约，按调用求和），输入在多组缓冲区间
 算出来的，比实测 2015 GB/s 还低，导致 `--peaks theoretical` 下 137/138 个 shape 违例。
 处理：删掉这几个理论值，并在 `calibrate` 里加了校验（理论值低于实测时不写入，只记一条 note）。
 `tests/test_check.py::test_theoretical_peak_is_never_below_measured` 防止再出现。
+
+## 6. 补 GEMM 分块模型之后（2026-11-13，第二轮）
+
+### 6.1 加了什么
+
+`opceil/model/tiling.py`：把一个 GEMM 当成「输出 tile 网格」来计价，在候选空间（tile 大小、split-K、线程数、LDS 级数）里
+挑出放得进 LDS / 寄存器的最快一种，作为 `T_split`（model 类，不进 `T_bound`）。新增的项：
+
+| 项 | 含义 |
+|---|---|
+| `compute:tiles` | 补零后的计算量 ÷（网格能占满的那部分 CU 的算力）：尾波和小网格的损失 |
+| `memory:hbm`（按 CTA 数） | 网格只有这么多 CTA 时能拉到的带宽（机器文件的 CTA–带宽曲线，形状来自微基准，饱和值取流式峰值） |
+| `memory:l2` / `memory:lds` | A 按 tile 列数、B 按 tile 行数重读 |
+| `serial:kloop` | 每波 CTA：首次 HBM 延迟 + 每个 K 步 max(依赖 MMAC + barrier, 操作数延迟 ÷ 预取深度) + 写回 L2 延迟 |
+| `fixed:launch` | 取 dispatch 间隔与「平凡 kernel 最短设备时长」（`bench/kernel_floor.py`，两张卡约 1.6 / 1.9 us）较大者 |
+
+所有假设登记在 `docs/devlog/constant-ledger.md`；**没有用这 276 个实测点调过任何常数**。
+
+### 6.2 效果：只收回了一小部分差距
+
+`T_theory`（融合、实测峰值）和 `T_split`（分块模型）各自 ÷ 实测，中位数：
+
+| min(M,N) | gfx936 T_theory → T_split | gfx938 T_theory → T_split |
+|---|---:|---:|
+| ≤ 16 | 0.82 → 0.82 | 0.67 → 0.67 |
+| 17–256 | 0.62 → 0.63 | 0.44 → 0.49 |
+| 257–2048（拐点附近） | 0.48 → **0.57** | 0.55 → **0.61** |
+| > 2048 | 0.76 → 0.79 | 0.83 → 0.83 |
+| 全部 | 0.66 → 0.68 | 0.57 → 0.60 |
+
+两张卡上 `T_split` 都**零违例**：模型没有比真实库算得更贵。但收紧有限，主要在拐点附近。
+小 shape 几乎没动：模型认为存在一个 2–4 us 的分块方案（小 tile + 大 split-K + 4 级预取），实测库要 9–25 us。
+
+### 6.3 差距是不是「库没选好」：TunableOp 对照
+
+`bench/gemm_sweep.py --tunableop` 让 PyTorch TunableOp 把每个 shape 的所有 hipBLASLt / rocBLAS 解都试一遍取最快
+（≤ 50 GFLOP 的 104 个 shape，数据在 `data/measured/*_tunableop.jsonl`）：
+
+| | gfx936 | gfx938 |
+|---|---:|---:|
+| 比默认选择快 10% 以上的 shape | 15 / 104 | 23 / 104 |
+| 最大提速 | 1.69x（M=1, N=6144, K=2048） | 1.58x（同一 shape） |
+| `T_split` / 实测，中位：默认 → 库内最优 | 0.64 → 0.69 | 0.55 → 0.56 |
+
+结论：库的启发式选择**只解释了一小部分**（集中在 decode 型小 M）。剩下的差距，库里没有任何现成解能填上：
+要么是手写 kernel 能拿到的空间，要么是模型漏了硬件行为。**用 BLAS 当尺子分不开这两者**；要分开，只能针对某一类 shape
+写一个 kernel 去逼近 `T_split`。这是下一步该做的实验，不是继续往模型里加项。
+
+### 6.4 2 的幂方阵：确认一半
+
+`bench/ld_pad.py`：同一个 GEMM，把 leading dimension 从 2 的幂加 64 个元素（`data/measured/ld_pad_20261113.json`）：
+
+| | 8192³ | 16384³ | 对照 4096³ / 12288³ |
+|---|---:|---:|---|
+| gfx936 | 308 → **399** TFLOPS（+30%） | 263 → **399**（+52%） | 不变 / 略降 |
+| gfx938 | 266 → **311**（+17%） | 220 → 220（不变） | 不变 / 略降 |
+
+gfx936 上就是 2 的幂步长的访存冲突，**补齐 leading dimension 即可拿回**（可直接作为优化建议）；
+gfx938 的 16384³ 另有原因（疑似持续满载降频），未确认。这类地址映射效应目前不在模型里。
+
+### 6.5 顺带修正的两处机器数据
+
+1. **gfx936 的 HBM 实测峰值偏低**：TunableOp 选出的 hipBLASLt kernel 在 M=32, N=24576, K=6144 上读 B 达到 1365.6 GB/s，
+   高于带宽微基准的 1339.2 GB/s，导致当时的 `T_bound` 被打破 2%。处理：
+   - **`T_bound` 一律改用手册峰值**（机器文件有 `theoretical` 时），因为实测峰值只是「微基准跑到的最好值」，是真实峰值的下估；
+     没有手册值的卡（gfx938）报告里会写明「T_bound 对哪些峰值退化为实测值」；
+   - `peaks.hbm_read.value` 提到 1365.6（原值留在 `microbench_value`，来源写进 `_observed`）：实测峰值 = 任何 kernel 达到过的最好值；
+   - CTA–带宽曲线只取形状，饱和值按流式峰值缩放（gfx938 的曲线顶点 1909 原本低于自身的流式峰值 2015）。
+2. 第 5 节的 gfx938 理论带宽 56 GB/s 问题（已修）。

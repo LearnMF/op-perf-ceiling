@@ -78,3 +78,24 @@ which tensor), the chunk size, the parallel structure of each op, and the on-chi
 | L2 带宽不按 CU 数缩放 | 保持峰值（少收钱） | 没有 L2 的 CTA 曲线 | 同上 |
 
 并发项整体可以用 `--occupancy off` 关掉做对照；关掉时 M2c 的数值完全复现。
+
+## 2026-11-13 新增：GEMM 分块模型（`opceil/model/tiling.py`）与 kernel 最短时长
+
+机器文件新增的**实测量**（通用微基准，不针对任何算子）：
+
+| 量 | 键 | 来源 | 用途 |
+|---|---|---|---|
+| 最短 kernel 时长 | `launch.kernel_min.best_us`（gfx936 1.599 us，gfx938 1.919 us） | `bench/kernel_floor.py`：add_/fill_/copy_ 的平凡 kernel，torch.profiler 设备时长取最小 | `fixed:launch` 取它与 `launch_stream` 中较大者 |
+
+分块模型的**设计选择 / 假设**（非测量、非拟合；都属 model 类，不进 `T_bound`）：
+
+| 假设 | 值 / 规则 | 依据 | 风险 |
+|---|---|---|---|
+| 候选空间 | Mt, Nt ∈ {16..256}，Kt ∈ {16..128}，split-K ∈ {1..32}，线程 ∈ {64, 256, 512}，LDS 级数 ∈ {2, 3, 4} | 覆盖 hipBLASLt 实际选到的 tile（MT16x..MT256x384 之外的极端配置不在内） | 空间外的更优配置看不到，`T_split` 偏高 |
+| 寄存器估算 | fp32 累加器 Mt·Nt/线程 + 一级 global→LDS 拷贝 + 16 | 与 KDA 插件同一 `REG_BASE` 假设 | 估高会误删可行 tile |
+| SIMD 占满条件 | 一个 CU 需 ≥ 4 个 wave 才能到矩阵峰值 | 每 CU 4 个 SIMD | — |
+| 每步依赖链 | max(依赖 MMAC + barrier, 操作数延迟 / (级数 − 1)) | 一级数据到达前不能消费；只被一个 CTA 行/列读的操作数走 HBM 延迟，否则 L2 延迟 | 寄存器预取可绕过，属 model |
+| split-K | 部分和 fp32 经 L2 原子累加，C 只写一次，不加第二个 kernel | 取最乐观的归约方式 | 偏乐观（不会造成违例） |
+| L2 复用 | A 按 tile 列数、B 按 tile 行数重读，全部命中 L2；HBM 只读一次 | 乐观 | 大矩阵 L2 装不下时偏乐观 |
+
+核对口径：这些常数**没有**用 `data/measured/` 的 276 个实测点调过；实测点只用于核对 `T_split <= 实测`（零违例是硬性要求，见 `tests/test_check.py`）。

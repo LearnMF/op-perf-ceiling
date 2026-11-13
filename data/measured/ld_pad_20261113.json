@@ -1,0 +1,13 @@
+{"_provenance": "bench/ld_pad.py, 2026-11-13, bf16 torch.matmul, leading dimension padded by 64 elements vs power of two; event timing, 20 reps",
+ "gfx936-bw1000 (bw52, card 1)": [
+  {"shape": [4096, 4096, 4096], "tflops_pow2": 333.4, "tflops_padded": 332.6},
+  {"shape": [8192, 8192, 8192], "tflops_pow2": 308.2, "tflops_padded": 399.1},
+  {"shape": [12288, 12288, 12288], "tflops_pow2": 414.2, "tflops_padded": 387.4},
+  {"shape": [16384, 16384, 16384], "tflops_pow2": 262.8, "tflops_padded": 398.6},
+  {"shape": [8192, 4096, 4096], "tflops_pow2": 364.4, "tflops_padded": 363.3}],
+ "gfx938-bw1102 (nmz5, card 6)": [
+  {"shape": [4096, 4096, 4096], "tflops_pow2": 298.9, "tflops_padded": 298.6},
+  {"shape": [8192, 8192, 8192], "tflops_pow2": 265.6, "tflops_padded": 311.3},
+  {"shape": [12288, 12288, 12288], "tflops_pow2": 344.5, "tflops_padded": 330.4},
+  {"shape": [16384, 16384, 16384], "tflops_pow2": 219.8, "tflops_padded": 220.3},
+  {"shape": [8192, 4096, 4096], "tflops_pow2": 302.9, "tflops_padded": 297.0}]}
