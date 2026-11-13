@@ -38,9 +38,7 @@
         "unroll": 4
       },
       "n_configs": 16,
-      "unit": "GB/s",
-      "theoretical": 56.0,
-      "pct_of_theoretical": 3597.7
+      "unit": "GB/s"
     },
     "hbm_read_nt": {
       "value": 2019.5,
@@ -52,9 +50,7 @@
         "unroll": 1
       },
       "n_configs": 8,
-      "unit": "GB/s",
-      "theoretical": 56.0,
-      "pct_of_theoretical": 3606.2
+      "unit": "GB/s"
     },
     "hbm_write": {
       "value": 1804.0,
@@ -66,9 +62,7 @@
         "unroll": 1
       },
       "n_configs": 16,
-      "unit": "GB/s",
-      "theoretical": 56.0,
-      "pct_of_theoretical": 3221.4
+      "unit": "GB/s"
     },
     "hbm_copy": {
       "value": 1675.8,
@@ -80,9 +74,7 @@
         "unroll": 1
       },
       "n_configs": 16,
-      "unit": "GB/s (read+write bytes)",
-      "theoretical": 56.0,
-      "pct_of_theoretical": 2992.5
+      "unit": "GB/s (read+write bytes)"
     },
     "l2_read": {
       "value": 5115.9,
@@ -286,7 +278,10 @@
         }
       },
       "note": "one CTA (8 waves) per CU, L2-resident 4 KB window per wave"
-    }
+    },
+    "_notes": [
+      "2026-11-13: removed theoretical HBM 56.0 GB/s -- computed by kra calibrate from device properties (memory_clock_khz 875000 x 2 x memory_bus_width 256 bit), below the measured 2014.7 GB/s, so the properties are wrong for this card.  No datasheet value is recorded; --peaks theoretical falls back to measured."
+    ]
   },
   "ridge_points_flop_per_byte": {
     "mmac_bf16_vs_hbm_read": 183.8,

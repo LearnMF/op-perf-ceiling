@@ -171,6 +171,16 @@ def summarize(rows: list[dict]) -> dict:
     # clock, i.e. DDR signalling -- recorded as an assumption, not a measurement).
     mck, bus = dev.get("memory_clock_khz"), dev.get("memory_bus_width")
     hbm_theory = mck * 1e3 * 2 * bus / 8 / 1e9 if mck and bus else None
+    # A theoretical peak below a measured one is impossible: the device properties are wrong for this card
+    # (gfx938 / BW1102 reports memory_bus_width 256 -> 56 GB/s against 2015 GB/s measured), so record nothing
+    # rather than a number that would turn every --peaks theoretical bound into a violation.
+    best = max((peaks[k]["value"] for k in ("hbm_read", "hbm_read_nt", "hbm_write") if k in peaks), default=0.0)
+    if hbm_theory and hbm_theory < best:
+        machine_notes = peaks.setdefault("_notes", [])
+        machine_notes.append("theoretical HBM bandwidth not recorded: device properties give %.1f GB/s "
+                             "(memory_clock_khz %s x 2 x bus %s bit), below the measured %.1f GB/s"
+                             % (hbm_theory, mck, bus, best))
+        hbm_theory = None
     if hbm_theory:
         for k in ("hbm_read", "hbm_read_nt", "hbm_write", "hbm_copy"):
             if k in peaks:

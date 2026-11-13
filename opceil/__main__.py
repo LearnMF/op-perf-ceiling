@@ -7,6 +7,7 @@ COMMANDS = {
     "predict": "opceil.model.pcli",
     "validate": "opceil.model.validate",
     "trace": "opceil.frontends.tcli",
+    "check": "opceil.model.check",
     "calibrate": "opceil.calibrate.run",
 }
 
