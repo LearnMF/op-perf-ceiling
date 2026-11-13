@@ -1,0 +1,21 @@
+[project]
+name = "op-perf-ceiling"
+version = "0.1.0"
+description = "Predict an operator's performance ceiling on HCU/DCU from shape + machine description"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+validate = ["pyyaml>=6.0"]
+torch = ["torch>=2.1"]
+dev = ["pytest>=7.0", "pyyaml>=6.0"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["opceil*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
