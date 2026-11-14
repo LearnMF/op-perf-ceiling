@@ -8,6 +8,7 @@ COMMANDS = {
     "validate": "opceil.model.validate",
     "trace": "opceil.frontends.tcli",
     "check": "opceil.model.check",
+    "transfer": "opceil.model.transfer",
     "calibrate": "opceil.calibrate.run",
 }
 

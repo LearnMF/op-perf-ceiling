@@ -1,0 +1,292 @@
+[
+ {
+  "from": "gfx936-bw1000",
+  "to": "gfx938-bw1102",
+  "kda_fla": {
+   "spec: compute peak ratio": {
+    "n": 27,
+    "median_pct": 44.10274062550859,
+    "mean_pct": 46.92058181765175,
+    "max_pct": 72.93361782593433,
+    "within_10": 0,
+    "within_20": 0
+   },
+   "spec: HBM bandwidth ratio": {
+    "n": 27,
+    "median_pct": 23.99299326000348,
+    "mean_pct": 22.506722606483713,
+    "max_pct": 31.498986625265147,
+    "within_10": 1,
+    "within_20": 7
+   },
+   "tool model ratio (T_split p82, per shape)": {
+    "n": 27,
+    "median_pct": 26.073348131446583,
+    "mean_pct": 25.335936471317677,
+    "max_pct": 34.31347750627845,
+    "within_10": 0,
+    "within_20": 3
+   },
+   "mk3's measured ratio (other implementation, median)": {
+    "n": 27,
+    "median_pct": 10.962672035263187,
+    "mean_pct": 9.731942944038362,
+    "max_pct": 19.755461300733113,
+    "within_10": 12,
+    "within_20": 27
+   },
+   "FLA GDN ratio, whole op (other operator)": {
+    "n": 27,
+    "median_pct": 4.774102641270406,
+    "mean_pct": 6.448833732377583,
+    "max_pct": 23.85114752328301,
+    "within_10": 20,
+    "within_20": 26
+   },
+   "FLA GDN ratios per pattern (other operator)": {
+    "n": 27,
+    "median_pct": 4.466331290384318,
+    "mean_pct": 5.287997419038998,
+    "max_pct": 21.94286334551507,
+    "within_10": 24,
+    "within_20": 26
+   }
+  },
+  "gdn_fla": {
+   "spec: compute peak ratio": {
+    "n": 15,
+    "median_pct": 39.63021036476402,
+    "mean_pct": 42.4194586203077,
+    "max_pct": 67.51340240734318,
+    "within_10": 0,
+    "within_20": 1
+   },
+   "spec: HBM bandwidth ratio": {
+    "n": 15,
+    "median_pct": 26.352029848743253,
+    "mean_pct": 24.880840542846702,
+    "max_pct": 37.22730736026125,
+    "within_10": 0,
+    "within_20": 4
+   },
+   "FLA KDA ratio, whole op": {
+    "n": 15,
+    "median_pct": 8.855366423919387,
+    "mean_pct": 8.906768596005469,
+    "max_pct": 17.411965906682127,
+    "within_10": 8,
+    "within_20": 15
+   },
+   "FLA KDA ratios per pattern": {
+    "n": 15,
+    "median_pct": 8.527959109065241,
+    "mean_pct": 9.385232174503555,
+    "max_pct": 24.033209265891887,
+    "within_10": 8,
+    "within_20": 14
+   },
+   "(reference) same-op LOO: FLA GDN's own median ratio, leave one shape out": {
+    "n": 15,
+    "median_pct": 9.184620570438806,
+    "mean_pct": 10.137780965468345,
+    "max_pct": 21.1449269283432,
+    "within_10": 10,
+    "within_20": 13
+   }
+  },
+  "spec_ratios_b_over_a": {
+   "compute peak ratio": 1.2820302167536248,
+   "HBM bandwidth ratio": 0.6762069819262193
+  },
+  "pattern_ratios_b_over_a": {
+   "FLA KDA": {
+    "out_fwd": 0.5809490449948604,
+    "stream": 0.9344955760038722,
+    "scan_fwd": 1.1127421727120963,
+    "wy_fwd": 0.6587195099043746,
+    "chunk_tri": 1.022326636535508,
+    "scan_bwd": 1.1009762515444947,
+    "bwd_wy_dqk": 0.5745472428185295
+   },
+   "FLA GDN": {
+    "out_fwd": 0.941989844588045,
+    "stream": 0.8792025939119168,
+    "scan_fwd": 1.0172930756021024,
+    "wy_fwd": 0.6462180707642758,
+    "chunk_tri": 0.9623330556659399,
+    "scan_bwd": 1.144727730435611,
+    "bwd_wy_dqk": 0.7644114851569341
+   }
+  },
+  "whole_ratio_b_over_a": {
+   "FLA KDA": 0.8896640072136727,
+   "FLA GDN": 0.918161057986308,
+   "mk3 KDA": 0.7921330598870575
+  },
+  "fla_over_mk3": {
+   "gfx936-bw1000": {
+    "median": 2.065960014164671,
+    "min": 1.876363243158769,
+    "max": 2.413308712882511
+   },
+   "gfx938-bw1102": {
+    "median": 2.331520083217782,
+    "min": 1.9267686301613771,
+    "max": 2.62968405042665
+   }
+  },
+  "mk3_on_b_from_fla_on_b_divided_by_factor_of_a": {
+   "n": 27,
+   "median_pct": 10.628437896804455,
+   "mean_pct": 10.844166966034079,
+   "max_pct": 27.018118960270133,
+   "within_10": 13,
+   "within_20": 24
+  }
+ },
+ {
+  "from": "gfx938-bw1102",
+  "to": "gfx936-bw1000",
+  "kda_fla": {
+   "spec: compute peak ratio": {
+    "n": 27,
+    "median_pct": 30.605067213899805,
+    "mean_pct": 31.666057663322988,
+    "max_pct": 42.17434339420656,
+    "within_10": 0,
+    "within_20": 0
+   },
+   "spec: HBM bandwidth ratio": {
+    "n": 27,
+    "median_pct": 31.56681770416021,
+    "mean_pct": 29.555271162637016,
+    "max_pct": 45.983241814175635,
+    "within_10": 1,
+    "within_20": 4
+   },
+   "tool model ratio (T_split p82, per shape)": {
+    "n": 27,
+    "median_pct": 35.26921275672916,
+    "mean_pct": 34.43944803799771,
+    "max_pct": 52.23823122857234,
+    "within_10": 0,
+    "within_20": 1
+   },
+   "mk3's measured ratio (other implementation, median)": {
+    "n": 27,
+    "median_pct": 12.312445000152007,
+    "mean_pct": 11.073082187541825,
+    "max_pct": 24.61907267580017,
+    "within_10": 10,
+    "within_20": 25
+   },
+   "FLA GDN ratio, whole op (other operator)": {
+    "n": 27,
+    "median_pct": 4.556567435004588,
+    "mean_pct": 5.87829248539591,
+    "max_pct": 19.257914036524536,
+    "within_10": 23,
+    "within_20": 27
+   },
+   "FLA GDN ratios per pattern (other operator)": {
+    "n": 27,
+    "median_pct": 4.878602863495274,
+    "mean_pct": 5.756208885034826,
+    "max_pct": 18.875598043846697,
+    "within_10": 24,
+    "within_20": 27
+   }
+  },
+  "gdn_fla": {
+   "spec: compute peak ratio": {
+    "n": 15,
+    "median_pct": 28.382260730851694,
+    "mean_pct": 29.041709845603787,
+    "max_pct": 40.30328405793496,
+    "within_10": 0,
+    "within_20": 1
+   },
+   "spec: HBM bandwidth ratio": {
+    "n": 15,
+    "median_pct": 35.78106741383631,
+    "mean_pct": 34.53080867040346,
+    "max_pct": 59.30493944861337,
+    "within_10": 0,
+    "within_20": 3
+   },
+   "FLA KDA ratio, whole op": {
+    "n": 15,
+    "median_pct": 9.715729908034131,
+    "mean_pct": 9.111493718296984,
+    "max_pct": 21.082916063854974,
+    "within_10": 8,
+    "within_20": 14
+   },
+   "FLA KDA ratios per pattern": {
+    "n": 15,
+    "median_pct": 16.561257873119327,
+    "mean_pct": 14.952149248841554,
+    "max_pct": 43.47025982314678,
+    "within_10": 6,
+    "within_20": 9
+   },
+   "(reference) same-op LOO: FLA GDN's own median ratio, leave one shape out": {
+    "n": 15,
+    "median_pct": 9.543191868334544,
+    "mean_pct": 9.80898812024761,
+    "max_pct": 19.108103397222198,
+    "within_10": 8,
+    "within_20": 15
+   }
+  },
+  "spec_ratios_b_over_a": {
+   "compute peak ratio": 0.7800128163376789,
+   "HBM bandwidth ratio": 1.4788371411833625
+  },
+  "pattern_ratios_b_over_a": {
+   "FLA KDA": {
+    "out_fwd": 1.7213213596191503,
+    "stream": 1.0700960236497217,
+    "scan_fwd": 0.8986807766642755,
+    "wy_fwd": 1.5180968302353284,
+    "chunk_tri": 0.9781609558651732,
+    "scan_bwd": 0.9082848050511162,
+    "bwd_wy_dqk": 1.7405009118037826
+   },
+   "FLA GDN": {
+    "out_fwd": 1.0615825698602135,
+    "stream": 1.1373942785480287,
+    "scan_fwd": 0.9830008912703282,
+    "wy_fwd": 1.5474652369552429,
+    "chunk_tri": 1.0391412766217352,
+    "scan_bwd": 0.8735701716769483,
+    "bwd_wy_dqk": 1.308195938205585
+   }
+  },
+  "whole_ratio_b_over_a": {
+   "FLA KDA": 1.1240198455728103,
+   "FLA GDN": 1.0891335363244217,
+   "mk3 KDA": 1.2624141708497563
+  },
+  "fla_over_mk3": {
+   "gfx936-bw1000": {
+    "median": 2.065960014164671,
+    "min": 1.876363243158769,
+    "max": 2.413308712882511
+   },
+   "gfx938-bw1102": {
+    "median": 2.331520083217782,
+    "min": 1.9267686301613771,
+    "max": 2.62968405042665
+   }
+  },
+  "mk3_on_b_from_fla_on_b_divided_by_factor_of_a": {
+   "n": 27,
+   "median_pct": 9.607328910057289,
+   "mean_pct": 9.474801812347224,
+   "max_pct": 21.271074695037097,
+   "within_10": 14,
+   "within_20": 26
+  }
+ }
+]

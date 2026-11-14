@@ -93,6 +93,9 @@ KDA 对两张卡各自已优化的 flash-train mk3（27 个形状，`docs/valida
 
 流式 kernel 离下限 0.6–0.8；以小三角乘积、递推为主的 kernel 只到 0.37–0.55（缺「满载下限」那一层：kernel 内部的指令级开销）。
 
+跨卡换算（`docs/validation-transfer.md`）：用同一个库里同族算子在两张卡上的**实测**比例去换算另一个算子，误差中位 5–10%；
+规格比例 24–44%，本工具的模型比例 26–35%。前提是比例能在目标硬件上测到（真卡、SOC 仿真或样片上的少数锚点 kernel）。
+
 结论口径：**`T_bound` 和瓶颈类型可以信；`T_theory` / `T_split` 的绝对值只在验证过的 shape 类别上可信。**
 
 ## 接入新算子
@@ -109,9 +112,9 @@ opceil/ops/        算子插件：gemm、elementwise / rmsnorm / softmax、atten
 opceil/frontends/  torch meta 自动推导（opceil trace）
 opceil/calibrate/  在真卡上生成机器文件的微基准
 machines/          内置机器文件：gfx936-bw1000、gfx938-bw1102
-bench/             卡上运行的测量脚本：gemm_sweep（含 --tunableop）、kernel_floor、ld_pad（只依赖 PyTorch），kda_bench（需 flash-train）
+bench/             卡上运行的测量脚本：gemm_sweep（含 --tunableop）、kernel_floor、ld_pad（只依赖 PyTorch），kda_bench（需 flash-train），fla_bench（需 FLA）
 data/              验证数据：kernel 级 GEMM 扫描、BW1000 训练 profile、KDA ceiling cards
 reports/           opceil check 的核对报告
-docs/              plugin-guide、validation-gemm、validation-kda；devlog/ 是迁移前的设计与里程碑记录
+docs/              plugin-guide、validation-gemm、validation-kda、validation-transfer；devlog/ 是迁移前的设计与里程碑记录
 tests/             pytest
 ```
