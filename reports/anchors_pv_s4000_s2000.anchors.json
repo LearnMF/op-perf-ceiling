@@ -1,0 +1,193 @@
+{
+ "within": {
+  "s4000": {
+   "combos": 24,
+   "median_of_median_pct": 11.43833857891674,
+   "worst_median_pct": 30.004849156306413,
+   "median_of_max_pct": 39.89413380235594,
+   "best_combo": {
+    "n": 13,
+    "median_pct": 8.373081708834507,
+    "mean_pct": 14.084117792714645,
+    "max_pct": 39.534489508952596,
+    "within_10": 7,
+    "within_20": 9
+   },
+   "worst_combo": {
+    "n": 13,
+    "median_pct": 30.004849156306413,
+    "mean_pct": 24.863736024984927,
+    "max_pct": 48.60409100552874,
+    "within_10": 3,
+    "within_20": 5
+   }
+  },
+  "s2000": {
+   "combos": 24,
+   "median_of_median_pct": 10.877225349975966,
+   "worst_median_pct": 14.091622001281978,
+   "median_of_max_pct": 39.360246693466195,
+   "best_combo": {
+    "n": 13,
+    "median_pct": 7.231327231846418,
+    "mean_pct": 12.499948660002252,
+    "max_pct": 36.80082588419593,
+    "within_10": 8,
+    "within_20": 10
+   },
+   "worst_combo": {
+    "n": 13,
+    "median_pct": 14.091622001281978,
+    "mean_pct": 16.68747840279043,
+    "max_pct": 36.80082588419593,
+    "within_10": 5,
+    "within_20": 8
+   }
+  }
+ },
+ "cross": {
+  "ratios_b_over_a": {
+   "floor anchor": 1.0068555650783817,
+   "memory anchor": 0.602136256597259,
+   "compute anchor": 0.4590389450215834,
+   "whole GEMM median": 0.6211913597809262,
+   "'S2200 = 83% x S2000' style: one flat 1/1.0": 1.0
+  },
+  "machines": {
+   "s2000": {
+    "floor": 18.059566430747417,
+    "bw": 2408627.554146562,
+    "peak": 977934776.3768322
+   },
+   "s4000": {
+    "floor": 18.183374963700764,
+    "bw": 4000137.0582764647,
+    "peak": 2130396095.9801593
+   }
+  },
+  "dsa": {
+   "n": 14,
+   "measured_ratio_median": 0.7930272516031942,
+   "by_ratio": {
+    "floor anchor": {
+     "n": 14,
+     "median_pct": 27.170839645226685,
+     "mean_pct": 32.241824250829325,
+     "max_pct": 69.58614291985381,
+     "within_10": 0,
+     "within_20": 5
+    },
+    "memory anchor": {
+     "n": 14,
+     "median_pct": 23.947211508588172,
+     "mean_pct": 21.11724721964496,
+     "max_pct": 33.01048548872906,
+     "within_10": 2,
+     "within_20": 6
+    },
+    "compute anchor": {
+     "n": 14,
+     "median_pct": 42.02110998541352,
+     "mean_pct": 39.709180147298845,
+     "max_pct": 48.930502470423995,
+     "within_10": 0,
+     "within_20": 0
+    },
+    "whole GEMM median": {
+     "n": 14,
+     "median_pct": 21.540457694594263,
+     "mean_pct": 19.452842789276474,
+     "max_pct": 30.890546525993866,
+     "within_10": 3,
+     "within_20": 7
+    },
+    "'S2200 = 83% x S2000' style: one flat 1/1.0": {
+     "n": 14,
+     "median_pct": 26.30494785548183,
+     "mean_pct": 31.341404703399107,
+     "max_pct": 68.43145015208995,
+     "within_10": 0,
+     "within_20": 6
+    }
+   }
+  },
+  "moe": {
+   "tokens": [
+    16,
+    64,
+    2048,
+    4096,
+    8192
+   ],
+   "ep": {
+    "s2000": 16,
+    "s4000": 8
+   },
+   "by_ratio": {
+    "floor anchor": {
+     "n": 5,
+     "median_pct": 26.6094355385627,
+     "mean_pct": 28.300376796615247,
+     "max_pct": 42.665507678990444,
+     "within_10": 0,
+     "within_20": 2
+    },
+    "memory anchor": {
+     "n": 5,
+     "median_pct": 24.282951587850366,
+     "mean_pct": 23.27170720030967,
+     "max_pct": 30.1347830658525,
+     "within_10": 0,
+     "within_20": 2
+    },
+    "compute anchor": {
+     "n": 5,
+     "median_pct": 42.27706164103531,
+     "mean_pct": 41.50613886113342,
+     "max_pct": 46.7382089622186,
+     "within_10": 0,
+     "within_20": 0
+    },
+    "whole GEMM median": {
+     "n": 5,
+     "median_pct": 21.886822548204677,
+     "mean_pct": 20.843576490049788,
+     "max_pct": 27.923840105611674,
+     "within_10": 0,
+     "within_20": 2
+    },
+    "'S2200 = 83% x S2000' style: one flat 1/1.0": {
+     "n": 5,
+     "median_pct": 25.74736628555696,
+     "mean_pct": 27.42679411681786,
+     "max_pct": 41.694114456112885,
+     "within_10": 0,
+     "within_20": 2
+    },
+    "L0 model ratio on the anchor machines, each card's own EP": {
+     "n": 5,
+     "median_pct": 51.43409682429927,
+     "mean_pct": 50.15073560752526,
+     "max_pct": 61.98169991995848,
+     "within_10": 0,
+     "within_20": 0
+    },
+    "L0 model alone on S4000's anchor machine (no S2000 data)": {
+     "n": 5,
+     "median_pct": 58.158544905417685,
+     "mean_pct": 69.43325427398005,
+     "max_pct": 124.13880227894217,
+     "within_10": 0,
+     "within_20": 0
+    }
+   },
+   "measured_ratio": {
+    "16": 0.8392238271851575,
+    "64": 0.8618541285927895,
+    "2048": 0.7952452838885881,
+    "4096": 0.7434620786110999,
+    "8192": 0.7057456153619784
+   }
+  }
+ }
+}

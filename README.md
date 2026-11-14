@@ -96,6 +96,9 @@ KDA 对两张卡各自已优化的 flash-train mk3（27 个形状，`docs/valida
 跨卡换算（`docs/validation-transfer.md`）：用同一个库里同族算子在两张卡上的**实测**比例去换算另一个算子，误差中位 5–10%；
 规格比例 24–44%，本工具的模型比例 26–35%。前提是比例能在目标硬件上测到（真卡、SOC 仿真或样片上的少数锚点 kernel）。
 
+未知硬件（PV 表 S4000 / S2000 当真值，`docs/validation-anchors.md`）：目标卡上同族 3 个锚点 + L0 Roofline，GEMM 整族误差约 11%；
+同族锚点比例换算 DSA / MoE 约 10–12%；用 GEMM 锚点换算其它族 22–24%（与不换算差不多）。
+
 结论口径：**`T_bound` 和瓶颈类型可以信；`T_theory` / `T_split` 的绝对值只在验证过的 shape 类别上可信。**
 
 ## 接入新算子
@@ -115,6 +118,6 @@ machines/          内置机器文件：gfx936-bw1000、gfx938-bw1102
 bench/             卡上运行的测量脚本：gemm_sweep（含 --tunableop）、kernel_floor、ld_pad（只依赖 PyTorch），kda_bench（需 flash-train），fla_bench（需 FLA）
 data/              验证数据：kernel 级 GEMM 扫描、BW1000 训练 profile、KDA ceiling cards
 reports/           opceil check 的核对报告
-docs/              plugin-guide、validation-gemm、validation-kda、validation-transfer；devlog/ 是迁移前的设计与里程碑记录
+docs/              plugin-guide、validation-gemm / kda / transfer / anchors、tool-design；devlog/ 是迁移前的设计与里程碑记录
 tests/             pytest
 ```
