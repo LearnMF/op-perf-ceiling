@@ -1,0 +1,225 @@
+<h1>摘要</h1>
+<p>本文回答一个问题：给定一个算子和一组（可能没见过的）硬件指标，用 Roofline 模型（含分层 Roofline）评估这个算子的<b>性能优化可达上限</b>，可靠到什么程度。结论基于 2026-11-13 在 gfx936（BW1000）、gfx938（BW1102）上的实测，以及蓝信 PV 表中 S4000 / S2000 的 SOC 硅前仿真结果，全部数据与脚本在仓库 <a href="https://github.com/LearnMF/op-perf-ceiling">LearnMF/op-perf-ceiling</a>。</p>
+<p>核心结论有三点。第一，Roofline 给出的是<b>下限</b>（任何实现都快不过它），不是可达上限；在约 600 个实测点上下限从未被打破，形状间的快慢排序也准（Spearman 0.98–0.99）。第二，可达上限由「算法 × 硬件微架构 × 实现空间」共同决定，Roofline 只覆盖其中「数据要搬多少、在哪一层搬」那一半；kernel 内部怎么执行（依赖、等待、指令效率）以及实现方案本身，必须有具体 kernel 并实测才能得到。因此只用 Roofline 预测优化后的耗时，简单算子误差 10–25%，复杂算子（KDA）约 2 倍。第三，要在没见过的硬件上做到 10% 级误差，必须引入实测：在已有卡上的同类实现，加上目标硬件上的同类锚点（SOC 仿真或样片），用 AI 驱动的工作流完成判断与编排，用确定性脚本完成计算与测量。</p>
+<table>
+<thead><tr><th background-color="light-gray">问题</th><th background-color="light-gray">现在能给到什么程度</th><th background-color="light-gray">依据</th></tr></thead>
+<tbody>
+<tr><td>最快不可能低于多少（物理下限）</td><td>可靠</td><td>GEMM 两卡 276 个形状 + TunableOp 208 个、KDA 两卡 54 个形状，全部零违例</td></tr>
+<tr><td>瓶颈方向、形状间排序</td><td>简单算子可靠；复杂算子瓶颈可能判错</td><td>排序 Spearman 0.98–0.99；KDA 的递推 / 三角乘积 kernel 被判为显存受限，实际不是</td></tr>
+<tr><td>只给算子公式 + 硬件规格，预测优化后耗时</td><td>简单算子 10–25%，复杂算子约 2 倍</td><td>大 GEMM 误差中位 17–21%；KDA mk3 误差 44% / 52%</td></tr>
+<tr><td>目标硬件上有同类锚点</td><td>约 10–12%</td><td>PV 表 GEMM 3 锚点 11%；DSA 12%、MoE 10%</td></tr>
+<tr><td>用别的算子类别的锚点换算</td><td>22–24%（与不换算相当）</td><td>PV 表 GEMM 锚点换算 DSA / MoE</td></tr>
+<tr><td>同卡已有打磨到位的实现，预测新形状</td><td>5–7%</td><td>KDA mk3 同卡留一法</td></tr>
+</tbody>
+</table>
+
+<h1>1 问题定义：下限与可达上限</h1>
+<h2>1.1 两个容易混淆的概念</h2>
+<table>
+<thead><tr><th background-color="light-gray">概念</th><th background-color="light-gray">含义</th><th background-color="light-gray">能否算出</th></tr></thead>
+<tbody>
+<tr><td><b>物理下限</b></td><td>由算法必需的工作量和硬件峰值决定：任何实现都快不过它</td><td>能算，可证明</td></tr>
+<tr><td><b>可达上限</b></td><td>所有可能实现里最快的那一个能跑多快</td><td>算不出来：实现方案空间巨大且离散，只能搜索或凭经验估计</td></tr>
+</tbody>
+</table>
+<p>Roofline 回答的是第一个问题。把它当作第二个问题的答案，就会在复杂算子上出现约 2 倍的偏差（见第 5 节）。日常说的「性能上限」通常指第二个，它取决于优化手段和方案，这正是 Roofline 覆盖不到的部分。</p>
+<h2>1.2 可达上限 = 算法 × 硬件微架构 × 实现空间</h2>
+<table>
+<thead><tr><th background-color="light-gray">因素</th><th background-color="light-gray">包含什么</th><th background-color="light-gray">Roofline 能覆盖的部分</th><th background-color="light-gray">必须有 kernel + 实测的部分</th></tr></thead>
+<tbody>
+<tr><td>算法</td><td>必需计算量、必需字节、串行依赖结构，以及实现约束带来的必要额外工作（逐位一致、确定性归约要求的 fp32 交接等）</td><td>必需计算量、必需字节、串行步数（由插件或 torch 自动推导）</td><td>实现约束带来的额外工作（KDA 的 kernel 内冗余 1.32 倍里有一部分来自这里）</td></tr>
+<tr><td>硬件微架构</td><td>峰值、各级带宽与容量；指令延迟与发射规则、资源能重叠多少、缓存策略、地址映射、小 tile 下矩阵单元效率</td><td>峰值、各级带宽与容量（规格书、通用微基准）</td><td>指令级行为、重叠程度、地址映射（2 的幂步长让 gfx936 GEMM 慢 30–50%）</td></tr>
+<tr><td>实现空间</td><td>拆成几个 kernel、融合与重算、tile 与流水级数、数据布局、指令选择、调度</td><td>给定拆法后的交接代价；在容量约束下枚举候选拆法 / 分块</td><td>具体方案的真实执行效率；最优方案是否在候选空间内</td></tr>
+</tbody>
+</table>
+
+<h1>2 四层下限：哪些 Roofline 能给，哪些必须有 kernel</h1>
+<p>方法论（《HCU 算子性能优化教程》第 6 章）把一个算子从理论到实测分成四层，相邻两层之比是一项开销：</p>
+<p><latex>T_{meas} = T_{theory} \times O_{handoff} \times O_{redund} \times O_{idle}</latex></p>
+<table>
+<thead><tr><th background-color="light-gray">层</th><th background-color="light-gray">要什么输入</th><th background-color="light-gray">不写 kernel 能不能得到</th><th background-color="light-gray">依据</th></tr></thead>
+<tbody>
+<tr><td><b>理论下限</b> <latex>T_{theory}</latex></td><td>算法必需的工作量 + 硬件峰值</td><td><b>能</b>，这是纯 Roofline</td><td>约 600 个实测点没有一次被打破；KDA 上工具算的 0.837 ms 和旧报告的 0.83 ms 一致</td></tr>
+<tr><td><b>拆分下限</b> <latex>T_{split}</latex></td><td>在上面基础上，还要「拆成哪几个 kernel、中间张量多大、片上放不放得下」</td><td><b>能算，但要先给出拆法</b>。拆法属于实现方案，可以照已有实现照搬，也可以让工具或 AI 在片上容量约束下枚举搜索</td><td>照生产拆法（p82）算出 3.34 ms，旧报告用实际 kernel 的中间张量量出 3.35 ms，对得上；但拆法和 mk3 对不上时就会偏（mk3 的 fwd_prep 拆成了两个 kernel，p82 里是一个）</td></tr>
+<tr><td><b>满载下限</b> <latex>T_{full}</latex></td><td>每个 kernel <b>实际执行的</b>指令数和字节数（硬件计数器）</td><td><b>不能</b>，必须有 kernel 并实测</td><td>旧报告：满载 ÷ 拆分 = 1.32 倍，是 kernel 内部的冗余开销</td></tr>
+<tr><td><b>实测</b> <latex>T_{meas}</latex></td><td>实际运行时间</td><td><b>不能</b></td><td>实测 ÷ 满载 = 1.21 倍，是硬件空等开销</td></tr>
+</tbody>
+</table>
+<p>所以 Roofline（含分层）本身只覆盖理论下限。拆分下限是 Roofline 加上「拆法 + 片上容量约束」：不需要代码，但需要实现方案层面的信息，是「半事前」的，而且搜索空间由人或插件写定，属于模型估计而非严格下限。满载下限和实测只能事后测量，在 KDA 上这两层合起来约 1.6 倍，是 Roofline 永远算不出来的那一部分。</p>
+<p>以 gfx936 上 KDA 16K/TP8 的旧报告为例：<latex>5.32 = 0.83 \times 4.04 \times 1.32 \times 1.21</latex>（ms）。其中交接开销 4.04 倍可以由工具事前算出；kernel 内冗余 1.32 倍和硬件空等 1.21 倍只能靠实现与实测。工具里另有一层「可证明下限」<latex>T_{bound}</latex>：只保留可证明的项，并且按手册峰值计价，它比 <latex>T_{theory}</latex> 更松，但任何情况下都打不破。</p>
+
+<h1>3 分层 Roofline：能回答什么，回答不了什么</h1>
+<p>分层 Roofline 对每一级存储（HBM、L2、LDS）各算一次「必需字节 ÷ 该层带宽」，再结合片上容量判断哪些中间结果必须落回显存。它回答的是「<b>数据要搬多少、在哪一层搬</b>」这一半问题，这一半在实测中表现良好。</p>
+<p><b>KDA。</b>分层 Roofline 与片上容量约束一起，算出了「放不下必须拆 kernel、中间结果多过几次显存」的代价，也就是 KDA 最大的一项开销（交接 4.04 倍）。在 16K/TP8 的最优拆法上，HBM 层屋顶 2529 us，占拆分下限的 91%，计算强度 25.4 而拐点 327，直接说明「要动的是字节数（融合、交接留片上），不是算力」；LDS 层只占 106 us，不是当前该动的地方。</p>
+<p><b>GEMM。</b>把 L2 重读、LDS 暂存、尾波和小网格计入后（分块模型），拐点附近的预测 ÷ 实测从 0.48 收紧到 0.57（gfx936），两卡、两种库选择下零违例。</p>
+<p>另一半是「<b>kernel 内部怎么执行</b>」：依赖链、等待、指令效率、小 tile 下矩阵单元吃不满、寄存器与 LDS bank 冲突。分层 Roofline 本质上仍是「每层字节 ÷ 带宽，各资源完全重叠取最大」，只看吞吐，看不到这一半。复杂算子恰恰卡在这里：KDA 的递推和三角乘积 kernel 被判为显存受限，LDS 层也只算出 106 us，可实测是下限的 2 倍；连带的跨卡比例也错了（工具按带宽之比预测 gfx938 快 1.54 倍，实测只快 1.26 倍，误差 22%）。这说明算子越复杂，kernel 内部执行所占的比重越大，Roofline 的可靠性越低，而且错误会传导到瓶颈判断和硬件对比上。</p>
+
+<h1>4 实测验证一：GEMM（gfx936 / gfx938）</h1>
+<p>每张卡 138 个 bf16 GEMM 形状，单个 torch.matmul 的 kernel 级设备时间（输入在多组缓冲区间轮换，避免 L2 常驻）；另用 PyTorch TunableOp 试遍 hipBLASLt / rocBLAS 的所有解，取每个形状的库内最优（每卡 104 个形状）。</p>
+<table>
+<thead><tr><th background-color="light-gray">指标</th><th background-color="light-gray">gfx936 / BW1000</th><th background-color="light-gray">gfx938 / BW1102</th></tr></thead>
+<tbody>
+<tr><td>下限违例（默认库 / 库内最优）</td><td>0 / 0</td><td>0 / 0</td></tr>
+<tr><td>分块模型 <latex>T_{split}</latex> 高于实测</td><td>0</td><td>0</td></tr>
+<tr><td>排序一致性（Spearman）</td><td>0.98</td><td>0.98</td></tr>
+<tr><td><latex>T_{split}</latex> ÷ 实测，中位：全部 / 拐点附近 / 大 shape</td><td>0.68 / 0.57 / 0.79</td><td>0.60 / 0.61 / 0.83</td></tr>
+</tbody>
+</table>
+<p>把各个时间直接当作「能达到的耗时」去预测（实测取默认库与库内最优中较快者）：</p>
+<table>
+<thead><tr><th background-color="light-gray">预测方式</th><th background-color="light-gray">gfx936 误差中位</th><th background-color="light-gray">gfx938 误差中位</th></tr></thead>
+<tbody>
+<tr><td>现有分档系数（hcu-train-simulator）</td><td>78%</td><td>83%</td></tr>
+<tr><td><latex>T_{bound}</latex></td><td>40%</td><td>35%</td></tr>
+<tr><td><latex>T_{split}</latex>（分块模型，不调常数）</td><td>27%</td><td>35%</td></tr>
+<tr><td><latex>T_{split}</latex> ÷ 一个全局效率系数（留一法）</td><td>22%</td><td>28%</td></tr>
+<tr><td><latex>T_{split}</latex>，只看大 shape</td><td>21%</td><td>17%</td></tr>
+</tbody>
+</table>
+<p>大 shape 的算力受限、访存受限两端下限基本是紧的；拐点附近和小 shape 偏乐观 1.5–6 倍，而且库内最优解也填不上（gfx936 上比值中位只从 0.64 提到 0.69），此时用 BLAS 当尺子已经分不清「手写能拿到」还是「模型漏项」。核对中还发现并修正了两处机器数据：gfx938 驱动报错总线位宽导致理论带宽仅 56 GB/s；gfx936 的 HBM 实测峰值被一个库 kernel 超过（1366 对 1339 GB/s），因此 <latex>T_{bound}</latex> 改为一律按手册峰值计价。此外，2 的幂方阵在 gfx936 上补齐 leading dimension 后快 30–52%，这类地址映射效应不在模型里。</p>
+
+<h1>5 实测验证二：KDA（gfx936 / gfx938）</h1>
+<h2>5.1 gfx936 上的四层对照</h2>
+<table>
+<thead><tr><th background-color="light-gray">层（16K/TP8）</th><th background-color="light-gray">旧报告（实测量出）</th><th background-color="light-gray">本工具（事前预测）</th></tr></thead>
+<tbody>
+<tr><td><latex>T_{theory}</latex></td><td>0.83 ms</td><td>0.837 ms</td></tr>
+<tr><td><latex>T_{split}</latex></td><td>3.35 ms</td><td>3.34 ms（p82 拆法）</td></tr>
+<tr><td><latex>T_{full}</latex></td><td>4.41 ms</td><td>不计算</td></tr>
+<tr><td><latex>T_{meas}</latex></td><td>5.32 ms（bw46），5.61 ms（bw52）</td><td>不计算；本次 bw52 上 mk3 实测 5.59 ms</td></tr>
+</tbody>
+</table>
+<p>前两层工具与方法论吻合；后两层乘积 1.32 × 1.21 ≈ 1.60 倍，而本次「实测 ÷ 拆分下限」为 1.67 倍，差距几乎全部落在工具不计算的两层里。</p>
+<h2>5.2 两卡各自已优化的 mk3，27 个形状</h2>
+<p>尺子为 LearnMF/flash-train 的 feat/kda-gfx936-mk3（30197cc）与 feat/kda-gfx938-mk3（7ef6f0b），两卡各自从源码编译；形状为 T = 1K–32K × H = 64/32/16/8，外加 K3 TP8 的 H = 12。</p>
+<table>
+<thead><tr><th background-color="light-gray">指标</th><th background-color="light-gray">gfx936</th><th background-color="light-gray">gfx938</th></tr></thead>
+<tbody>
+<tr><td>任一层下限高于实测</td><td>0 / 27</td><td>0 / 27</td></tr>
+<tr><td><latex>T_{theory}</latex> ÷ 实测，中位</td><td>0.12</td><td>0.09</td></tr>
+<tr><td><latex>T_{split}</latex>（p82）÷ 实测，中位</td><td>0.56</td><td>0.48</td></tr>
+<tr><td>误差：不校准</td><td>44%</td><td>52%</td></tr>
+<tr><td>误差：用另一张卡的实测按 kernel 校准</td><td>18%</td><td>16%</td></tr>
+<tr><td>误差：同卡、留一个形状校准</td><td>5.5%</td><td>6.8%</td></tr>
+<tr><td>形状排序一致性</td><td>0.99</td><td>0.996</td></tr>
+</tbody>
+</table>
+<h2>5.3 差距在哪：逐 kernel</h2>
+<table>
+<thead><tr><th background-color="light-gray">p82 kernel</th><th background-color="light-gray">主要工作</th><th background-color="light-gray">gfx936 预测 ÷ 实测</th><th background-color="light-gray">gfx938 预测 ÷ 实测</th></tr></thead>
+<tbody>
+<tr><td>head_gate</td><td>逐元素门控（流式）</td><td>0.77</td><td>0.79</td></tr>
+<tr><td>dav</td><td>一次三角乘积 + 流式</td><td>0.80</td><td>0.61</td></tr>
+<tr><td>bwd_tail</td><td>逐元素反向 + 归约</td><td>0.71</td><td>0.75</td></tr>
+<tr><td>wu</td><td>重算 W/U</td><td>0.70</td><td>0.62</td></tr>
+<tr><td>fwd_h_o</td><td>前向 chunk 递推</td><td>0.55</td><td>0.46</td></tr>
+<tr><td>dhu_bn</td><td>反向 chunk 递推</td><td>0.50</td><td>0.50</td></tr>
+<tr><td>wy_s4_split</td><td>大量小三角 / 方阵乘积</td><td>0.50</td><td>0.37</td></tr>
+<tr><td>fwd_prep</td><td>l2norm + 门控 + 三角求逆 + WY</td><td>0.46</td><td>0.38</td></tr>
+</tbody>
+</table>
+<p>流式 kernel 达到下限的 0.6–0.8，说明「字节 ÷ 带宽」这一层是对的；以小三角乘积、递推、三角求逆为主的 kernel 只到 0.37–0.55，它们实际卡在 chunk 内的小矩阵乘、依赖链、LDS 往返和向量运算上，即满载下限那一层。另有三处方法上的不足：插件只计算法必需工作，少算了实现必须付出的指令（旧报告证实 prep_a 是计算受限）；p82 拆法是近似重建，与 mk3 不完全一致；gfx938 的机器文件没有按 KDA 实测的常数，因此更乐观。</p>
+
+<h1>6 跨硬件检验：用蓝信 PV 表当目标值</h1>
+<h2>6.1 逻辑关系</h2>
+<p>工具的目标场景是「硬件还没造出来，想提前知道算子在上面跑多快」。要检验这个场景，需要一张「跑不了、但有标准答案」的卡。PV 表正是：SOC 团队用硅前仿真（C-model / EMU）给出 S4000 / S2000 上 GEMM、DSA、MoE 的耗时（曹媛媛 10-23 发布）。做法是假装只知道其中少数几行（锚点），用工具推剩下的行，再和 PV 表对答案。三者的分工是：SOC 仿真准但慢，只能跑少数形状（表中大量 running / no final result）；工具快但单独不准；锚点把两者接起来。</p>
+<h2>6.2 同类算子：目标卡上 3 个锚点 + L0 Roofline（GEMM）</h2>
+<p>每张卡从 16 行 GEMM 里只按形状选 3 个锚点：一个固定开销型、一个访存型、一个算力型。以 S4000 为例，由锚点得到有效地板 18.2 us、有效带宽约 4.0 TB/s、有效 fp8 算力约 2316 TFLOPS，再用 max(地板, 字节 ÷ 带宽, 计算量 ÷ 算力) 推其余 13 行：</p>
+<table>
+<thead><tr><th background-color="light-gray">被预测的行</th><th background-color="light-gray">工具预测</th><th background-color="light-gray">SOC 结果</th><th background-color="light-gray">误差</th></tr></thead>
+<tbody>
+<tr><td>bf16，M=1，N=6144，K=12288</td><td>37.8 us</td><td>38.9 us</td><td>−3%</td></tr>
+<tr><td>fp8，M=1，N=6144，K=2048</td><td>18.2 us</td><td>20.2 us</td><td>−10%</td></tr>
+<tr><td>fp8，M=7808，N=6144，K=2048</td><td>84.9 us</td><td>96.4 us</td><td>−12%</td></tr>
+<tr><td>fp8，M=6，N=24576，K=6144</td><td>37.8 us</td><td>44.7 us</td><td>−15%</td></tr>
+<tr><td>fp8，M=4608，N=4096，K=6144</td><td>100.2 us</td><td>122.0 us</td><td>−18%</td></tr>
+</tbody>
+</table>
+<p>所有锚点组合（每卡 24 种）下，误差中位 S4000 11.4%、S2000 10.9%，最差组合的中位 30% / 14%。</p>
+<h2>6.3 跨类别借用锚点不行，同类锚点可以</h2>
+<p>S4000 相对 S2000 的耗时比：GEMM 访存型 0.60、算力型 0.46，DSA 0.59–0.90，MoE 0.71–0.86。不同类别算子从新硬件得到的提升差别很大。</p>
+<table>
+<thead><tr><th background-color="light-gray">换算方式（S2000 → S4000）</th><th background-color="light-gray">DSA 误差中位</th><th background-color="light-gray">MoE 误差中位</th></tr></thead>
+<tbody>
+<tr><td>用 GEMM 锚点的比例（几种中最好的）</td><td>21.5%</td><td>21.9%</td></tr>
+<tr><td>不换算（相当于一刀切）</td><td>26.3%</td><td>25.7%</td></tr>
+<tr><td>用同类算子自己的锚点比例（留一法）</td><td>12.0%</td><td>9.9%</td></tr>
+<tr><td>MoE 按两卡各自 EP（8 / 16）做模型归一化</td><td>—</td><td>51%（更差）</td></tr>
+</tbody>
+</table>
+<h2>6.4 MoE 能不能做</h2>
+<p>能，前提有两个。一是要有同类锚点：PV 表两张卡都有 MoE 行，同类比例换算误差约 10%。二是要先确认数据口径：两张卡用了不同的 EP（S4000 为 8，S2000 为 16），按「token 为全局、均匀路由、不含通信」去归一化后误差从 22% 变成 51%，说明 num_tokens 的含义或 sim_total_us 是否含 EP 通信与假设不符（PV 资料里本就标注待确认）。口径确认后，再补一个 MoE 的工作量模型，就能像 GEMM 一样用锚点把整族铺开。这类口径问题脚本发现不了，需要人或 AI 去追。</p>
+
+<h1>7 已知硬件 → 未知硬件：怎么比只靠 Roofline 更可靠</h1>
+<p>在 gfx936 和 gfx938 上分别跑开源 FLA 0.5.2 的 KDA（27 个形状）与 GDN（flash-train issue #29 的 15 个形状），以及已优化的 mk3，用一张卡的实测预测另一张：</p>
+<table>
+<thead><tr><th background-color="light-gray">换算比例从哪来</th><th background-color="light-gray">FLA KDA 误差中位（936→938 / 938→936）</th><th background-color="light-gray">FLA GDN 误差中位</th></tr></thead>
+<tbody>
+<tr><td>规格比例（算力峰值或带宽之比）</td><td>24–44%</td><td>26–40%</td></tr>
+<tr><td>工具的模型比例（拆分下限之比）</td><td>26% / 35%</td><td>—</td></tr>
+<tr><td>同一算子另一实现（mk3）的实测比例</td><td>11% / 12%</td><td>—</td></tr>
+<tr><td>同族另一算子的实测比例</td><td>4.8% / 4.6%（用 GDN）</td><td>8.9% / 9.7%（用 KDA）</td></tr>
+</tbody>
+</table>
+<p>实测比例远比模型比例和规格比例准，因为它直接带上了真实的硬件敏感度。手工优化的收益则会随卡变化：FLA ÷ mk3 在 gfx936 上 2.07 倍、gfx938 上 2.33 倍；用「目标卡上的开源实现耗时 ÷ 参考卡的优化倍数」估优化后水平，误差约 10%，最坏 21–27%。按 kernel 模式拆开换算没有比整体换算更好，模式库要按具体实现建。</p>
+<table>
+<thead><tr><th background-color="light-gray">手里有什么</th><th background-color="light-gray">能给出什么</th><th background-color="light-gray">误差量级</th></tr></thead>
+<tbody>
+<tr><td>目标硬件能跑（gfx936 / gfx938 / H20 等对标卡）</td><td>直接实测，不需要预测</td><td>—</td></tr>
+<tr><td>只有算子公式和目标硬件规格</td><td>下限、瓶颈方向、经验倍数区间</td><td>简单算子 10–25%，复杂算子约 2 倍</td></tr>
+<tr><td>目标硬件上有同类锚点（SOC 仿真 / 样片）</td><td>锚点 + Roofline 铺开整族</td><td>约 10–12%</td></tr>
+<tr><td>已有卡上有同类实现 + 目标硬件同类锚点</td><td>按实测比例换算</td><td>5–10%（同一实现）；估优化后水平约 10–25%</td></tr>
+<tr><td>只能借别的类别的锚点</td><td>换算</td><td>20% 以上，与不换算相近</td></tr>
+<tr><td>同卡已有打磨到位的实现</td><td>预测新形状</td><td>5–7%</td></tr>
+</tbody>
+</table>
+
+<h1>8 低误差预测的整体方案：工具脚本 + AI 工作流</h1>
+<h2>8.1 三要素分别由谁负责</h2>
+<table>
+<thead><tr><th background-color="light-gray">因素</th><th background-color="light-gray">确定性工具负责</th><th background-color="light-gray">AI 工作流负责</th></tr></thead>
+<tbody>
+<tr><td>算法</td><td>工作量推导（插件、torch meta 自动推导）、交叉核对</td><td>读论文与参考实现，判断算子属于哪一类，起草插件</td></tr>
+<tr><td>硬件微架构</td><td>机器文件、通用微基准、下限与瓶颈计算、锚点 → 有效机器</td><td>决定需要哪些锚点、向 SOC 团队要哪些形状、核对锚点数据口径</td></tr>
+<tr><td>实现空间</td><td>候选拆法 / 分块的下限计算与剪枝、kernel 级测量、误差台账</td><td>列出候选方案，在已有卡上写原型并迭代优化，搜出可达上限的当前最好估计</td></tr>
+</tbody>
+</table>
+<h2>8.2 确定性脚本与 AI 驱动方案的对比</h2>
+<table>
+<thead><tr><th background-color="light-gray"></th><th background-color="light-gray">确定性脚本</th><th background-color="light-gray">AI 驱动工作流</th></tr></thead>
+<tbody>
+<tr><td>优势</td><td>可复现、可回归测试、数字有出处、速度快</td><td>能理解新算子结构、选择锚点与参考实现、追查数据口径、写原型 kernel 搜索实现空间</td></tr>
+<tr><td>不足</td><td>只能处理预先写好的情形；遇到口径错误、数据异常、没见过的算子结构时会静默地算出错数字</td><td>结果不确定、可能编造数字、成本高；必须调用确定性工具出数，并留下可核对的过程</td></tr>
+</tbody>
+</table>
+<p>这次验证中踩到的问题几乎都是判断问题而非公式问题：gfx938 驱动报错总线位宽；实测峰值被库 kernel 超过；<latex>T_{bound}</latex> 跨卡比例因混用手册与实测口径而碰巧准确；p82 拆法与 mk3 不符；BW1000 训练 profile 每条带约 530 us 的 Python 计时地板；MoE 两卡 EP 不同且口径未确认。固定脚本会把这些静默地算成错数字，因此只用脚本不足以应对「各种算子 × 各种硬件」；但每个数字又必须来自可复现的计算或实测，所以也不能把出数交给 AI。</p>
+<h2>8.3 推荐流程</h2>
+<ol>
+<li seq="auto">理解新算子：AI 读论文与参考实现，判断所属类别，用 torch 自动推导或起草插件得到工作量，并交叉核对。</li>
+<li seq="auto">给出物理下限与瓶颈方向：确定性工具计算 <latex>T_{bound}</latex>、<latex>T_{theory}</latex> 与分层表，作为底线和候选方案的剪枝依据。</li>
+<li seq="auto">在已有卡上取得实现：先跑开源实现；需要优化后水平时，由 AI 驱动的优化流程在 gfx936 / gfx938 上迭代搜索实现空间，结果进入锚点库。</li>
+<li seq="auto">取得目标硬件的同类锚点：与 SOC 团队按算子类别约定锚点形状清单，并核对每份数据的 dtype、并行配置、是否含通信。</li>
+<li seq="auto">换算与出报告：确定性工具按同类锚点比例换算，报告给出下限、预期区间、误差档位和未确认的假设。</li>
+<li seq="auto">回写：新的实测与锚点进入库，供下一个算子使用。</li>
+</ol>
+<p>不再投入的方向：为每个新算子编写精细的拆分模型（KDA 约 800 行仍差 2 倍）；用模型比例做跨卡换算；承诺「只给硬件参数就能低误差预测优化上限」。</p>
+
+<h1>9 外部参照（已核对原文出处）</h1>
+<table>
+<thead><tr><th background-color="light-gray">工作</th><th background-color="light-gray">输入</th><th background-color="light-gray">误差</th><th background-color="light-gray">说明</th></tr></thead>
+<tbody>
+<tr><td>TileSight（arXiv 2607.22432，预印本）</td><td>算子 + tile 执行计划 + 每卡一次微基准</td><td>GEMM 12.35%（NV 四卡），AMD MI210 23.4%；其 Roofline 基线 33.85% / 38.8%</td><td>预测给定调度的耗时；自述不覆盖受延迟限制的情形</td></tr>
+<tr><td>GPU-Tile-Sim（arXiv 2607.11262，MICRO 2026）</td><td>TileLang 写好的 kernel → tile 依赖图</td><td>1.22–8.71%（A100 / H100）</td><td>必须先有 kernel 实现</td></tr>
+<tr><td>Vr978/LLM-Inference-Performance（个人项目）</td><td>参数 + 公式 + 同卡校准</td><td>T4 上 43.8% → 24.0% → 12.9% → 9.2%</td><td>未经评审，仅一张卡</td></tr>
+<tr><td>Accel-Sim 2.0</td><td>代码 + 真卡 trace</td><td>周期误差 13.4%（H100，3.4 万 kernel）</td><td>模拟给定代码，不预测上限</td></tr>
+<tr><td>硬件团队 EMU</td><td>代码 + 完整微架构</td><td>约 5%</td><td>内部口头说法，无书面依据</td></tr>
+</tbody>
+</table>
+<p>两篇论文的低误差都建立在实现信息之上，与本文结论一致；我们 GEMM 不校准的误差与 TileSight 论文中的 Roofline 基线（34–39%）处于同一水平。</p>
+
+<h1>10 结论</h1>
+<p>Roofline（含分层）能可靠地给出物理下限、瓶颈方向和形状间排序，并能算出「数据要搬多少、在哪一层搬」带来的交接代价；它不能给出可达上限，因为可达上限还取决于 kernel 内部的执行效率和实现方案，这两部分只有具体 kernel 与实测才能得到。对复杂算子，这部分比重更大，Roofline 的偏差可达 2 倍，并会传导到瓶颈判断与跨硬件比较。</p>
+<p>面对没见过的硬件，可靠的做法不是继续加深公式，而是引入实测：在已有卡上获得同类实现，在目标硬件上获得同类锚点，用确定性工具完成计算与换算，用 AI 驱动的工作流完成算子理解、锚点选择、口径核对与实现空间搜索。在有同类锚点时可达约 10% 的误差；没有时，只能给出下限与较宽的区间，并应明确告知。</p>
+
+<h1>附录：数据与复现</h1>
+<p>代码与数据：<a href="https://github.com/LearnMF/op-perf-ceiling">LearnMF/op-perf-ceiling</a>。主要命令：python -m opceil predict（下限与分块）、check（与实测核对）、transfer（跨卡换算）、anchors（PV 锚点）。详细报告见仓库 docs/validation-gemm.md、validation-kda.md、validation-transfer.md、validation-anchors.md、tool-design.md 与 reports/ 目录。</p>
